@@ -4,7 +4,7 @@ import { Session } from '../../core/session';
 import { Workspace } from '../../core/workspace';
 import { FeatureSelection } from '../../core/feature-selection';
 import { CONFIG_PATH } from '../../core/github/api';
-import { ROLE_LABELS } from '../../core/config/team-config';
+import { ROLE_NAMES } from '../../core/config/team-config';
 import { avatarAt } from '../../core/avatar';
 
 /** Layout for everything under /r/:owner/:repo. */
@@ -197,7 +197,7 @@ export class RepoShell {
   });
   protected readonly rolesText = computed(() => {
     const roles = this.ws.roles();
-    return roles.length ? `Roles: ${roles.map((r) => ROLE_LABELS[r]).join(', ')}` : 'Viewer';
+    return roles.length ? `Roles: ${roles.map((r) => ROLE_NAMES[r]).join(', ')}` : 'Viewer';
   });
   protected readonly projectsScopeProblem = computed(() => {
     const e = this.ws.projectsError();

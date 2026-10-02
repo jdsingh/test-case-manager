@@ -4,7 +4,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
 import { Workspace } from '../../core/workspace';
 import { FeatureSelection } from '../../core/feature-selection';
-import { ROLE_LABELS } from '../../core/config/team-config';
+import { ROLE_NAMES } from '../../core/config/team-config';
 
 /** Placeholder for screens that arrive in later milestones. */
 @Component({
@@ -59,7 +59,7 @@ export class ComingSoonPage {
   protected readonly roles = computed(() =>
     this.ws
       .roles()
-      .map((r) => ROLE_LABELS[r])
+      .map((r) => ROLE_NAMES[r])
       .join(', '),
   );
 }

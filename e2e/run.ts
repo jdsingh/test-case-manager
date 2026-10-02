@@ -30,6 +30,15 @@ function check(cond: unknown, what: string): void {
   }
 }
 
+/** Waits up to 5 s for a locator to match exactly n elements. */
+async function countIs(l: Locator, n: number): Promise<boolean> {
+  for (let i = 0; i < 50; i++) {
+    if ((await l.count()) === n) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
+}
+
 /** Waits up to 5 s for a locator to show; isVisible() alone doesn't wait for async content. */
 async function shows(l: Locator): Promise<boolean> {
   return l.first().waitFor({ timeout: 5000 }).then(() => true, () => false);
@@ -155,7 +164,7 @@ try {
     await page.goto(`${BASE}/r/acme/shop-app-testbank`);
     await page.waitForURL(/\/cases/);
     check(true, 'PM lands on test cases');
-    check(await shows(page.getByRole('link', { name: 'Checkout v2' })), 'open feature board shown');
+    check(await shows(page.locator('main').getByText('Checkout v2')), 'open feature board shown');
     check((await page.locator('option', { hasText: 'Old release' }).count()) === 0, 'closed board hidden');
     await page.screenshot({ path: join(SHOTS, '6-pm-home.png'), fullPage: true });
     await page.context().close();
@@ -195,6 +204,166 @@ try {
     await page.getByText("The team config can't be read").waitFor();
     check(true, 'invalid config shows the parse error');
     await page.screenshot({ path: join(SHOTS, '8-invalid-config.png'), fullPage: true });
+    await page.context().close();
+  }
+
+  // 7. M2: test cases.
+  console.log('Test cases (M2)');
+  {
+    const { renderBody } = await import('../src/app/core/testcase/model');
+    const { reviewComment } = await import('../src/app/core/testcase/comments');
+    const gh = new MockGitHub();
+    gh.labels = (await import('../src/app/core/config/labels')).LABELS.map((l) => l.name);
+    gh.configText = JSON.stringify({
+      version: 1,
+      team: { pm: ['priya-pm'], techLead: ['alex-lead'], android: ['sam-android'], ios: ['jo-ios'] },
+      features: { '7': { targetVersion: '4.12.0' } },
+      assignment: { defaultReviewer: { android: 'sam-android' } },
+    });
+    const both = ['android', 'ios'] as ('android' | 'ios')[];
+    gh.addIssue({
+      title: '[TC] Guest checkout with saved card',
+      body: renderBody({
+        title: 'Guest checkout with saved card', priority: 'P0', platforms: both, preconditions: 'Card 4242 saved',
+        steps: [
+          { keyword: 'Given', text: 'a guest user with one item in the cart' },
+          { keyword: 'When', text: 'the user taps Pay' },
+          { keyword: 'Then', text: 'the order confirmation shows an order number' },
+        ],
+      }),
+      labels: ['testcase', 'priority:P0', 'platform:android', 'platform:ios', 'status:approved', 'regression'],
+      assignees: ['sam-android', 'jo-ios'],
+      comments: [{ id: 'c1', body: reviewComment('android', 'approve', ''), createdAt: '2026-10-01T09:00:00Z', author: 'sam-android' }],
+    });
+    gh.addIssue({
+      title: '[TC] Expired card shows an inline error',
+      body: renderBody({
+        title: 'Expired card shows an inline error', priority: 'P1', platforms: both, preconditions: '',
+        steps: [
+          { keyword: 'Given', text: 'a user paying with a card' },
+          { keyword: 'When', text: 'the user enters an expired card' },
+          { keyword: 'Then', text: 'an error is shown' },
+        ],
+      }),
+      labels: ['testcase', 'priority:P1', 'platform:android', 'platform:ios', 'status:changes-requested'],
+      assignees: ['priya-pm'],
+      comments: [{ id: 'c2', body: reviewComment('android', 'request_changes', 'Too vague: which message?'), createdAt: '2026-10-01T09:30:00Z', author: 'sam-android' }],
+    });
+    gh.addIssue({
+      title: '[TC] Cart persists after restart',
+      body: renderBody({
+        title: 'Cart persists after restart', priority: 'P2', platforms: ['android'], preconditions: '',
+        steps: [
+          { keyword: 'Given', text: 'three items in the cart' },
+          { keyword: 'When', text: 'the app restarts' },
+          { keyword: 'Then', text: 'the cart still has three items' },
+        ],
+      }),
+      labels: ['testcase', 'priority:P2', 'platform:android', 'status:draft'],
+      assignees: ['priya-pm'],
+    });
+
+    const page = await newPage(gh);
+    page.on('dialog', (d) => void d.accept());
+    await page.goto(`${BASE}/connect`);
+    await connect(page, 'tok-priya-pm');
+    await page.waitForURL(/\/repos/);
+    await page.goto(`${BASE}/r/acme/shop-app-testbank`);
+    await page.waitForURL(/\/cases/);
+    const rows = page.locator('table.cases tbody tr');
+    await rows.first().waitFor();
+    check(await countIs(rows, 3), 'list shows the 3 cases on the board');
+    check(await shows(page.getByRole('button', { name: '1 Approved' })), 'status counts');
+    await page.getByRole('button', { name: 'P0', exact: true }).click();
+    await page.waitForURL(/priority=P0/);
+    check(await countIs(rows, 1), 'priority filter, kept in the URL');
+    await page.getByRole('button', { name: 'P0', exact: true }).click();
+    await page.getByLabel('Search test cases').fill('expired');
+    await page.waitForURL(/q=expired/);
+    check(await countIs(rows, 1), 'search');
+    await page.getByLabel('Search test cases').fill('');
+    check(await countIs(rows, 3), 'clearing the search shows all again');
+    await page.screenshot({ path: join(SHOTS, '9-cases-list.png'), fullPage: true });
+
+    // New case: similar warning, validation, save and submit.
+    await page.locator('h1').click(); // move focus out of the search box
+    await page.keyboard.press('n');
+    await page.waitForURL(/\/cases\/new/);
+    await page.getByLabel('Scenario name').fill('Guest checkout with a saved card');
+    await page.getByLabel('Step 1 text').fill('a guest user with one item in the cart');
+    check(await shows(page.getByText('This looks like an existing test case')), 'duplicate warning (SL-2)');
+    await page.getByLabel('Scenario name').fill('Promo code updates the order total');
+    await page.getByLabel('Step 1 text').fill('a cart totalling $50');
+    await page.getByLabel('Step 1 text').press('Enter');
+    check(await shows(page.locator('li.step.and')), 'Enter adds an And step');
+    check(await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Step 2 text').then(() => true, () => false), 'focus moves to the new step');
+    await page.keyboard.type('promo code SAVE10 is active');
+    await page.getByRole('button', { name: 'Save draft' }).click();
+    check(await shows(page.getByText('Step 3 is empty.')), 'validation blocks empty steps');
+    await page.getByLabel('Step 3 text').fill('the user applies SAVE10');
+    await page.getByLabel('Step 4 text').fill('the total shows $45.00');
+    check(await shows(page.locator('aside .gherkin', { hasText: 'And promo code SAVE10 is active' })), 'live preview');
+    await page.screenshot({ path: join(SHOTS, '10-editor.png'), fullPage: true });
+    await page.getByRole('button', { name: 'Save and submit for review' }).click();
+    await page.waitForURL(/\/cases\/4/);
+    const created = gh.issue(4);
+    check(created.title === '[TC] Promo code updates the order total', 'issue created with [TC] title');
+    check(created.labels.includes('status:in-review') && created.labels.includes('priority:P1'), 'labels set');
+    check(created.projectIds.includes('P7'), 'added to the feature board');
+    check(created.assignees.join() === 'sam-android', 'assigned to the default reviewer');
+    check(created.comments[0]?.body.includes('@sam-android please review'), 'reviewer mentioned');
+    check(created.body.includes('    And promo code SAVE10 is active'), 'body in the PRD format');
+
+    // Edit an approved case: back to review (AU-8).
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/1/edit`);
+    await page.getByLabel('Step 3 text').fill('the order confirmation shows an order number and ETA');
+    check(await shows(page.getByText('Saving a change to its scenario sends it back to review')), 'warns before re-review');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await page.waitForURL(/\/cases\/1(\?|$)/);
+    const edited = gh.issue(1);
+    check(edited.labels.includes('status:in-review') && edited.labels.includes('regression'), 'approved case back in review, regression kept');
+    check(edited.comments.at(-1)?.body.includes('needs review again'), 'edit comment explains why');
+    check(await shows(page.getByText('In review').first()), 'detail page shows the new status');
+
+    // Changes requested → edit → resubmit.
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/2`);
+    check(await shows(page.getByText('sam-android requested changes')), 'change request highlighted');
+    await page.screenshot({ path: join(SHOTS, '11-detail-changes.png'), fullPage: true });
+    await page.getByRole('link', { name: 'Edit' }).click();
+    await page.getByLabel('Step 3 text').fill('"Card expired" shows under the card field');
+    await page.getByLabel('Step 3 text').press('Enter');
+    await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Step 4 text');
+    await page.keyboard.type('the Pay button stays disabled');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await page.waitForURL(/\/cases\/2(\?|$)/);
+    check(gh.issue(2).labels.includes('status:changes-requested'), 'edit alone keeps it waiting for resubmit');
+    await page.getByRole('button', { name: 'Resubmit for review' }).click();
+    check(await shows(page.getByRole('dialog').getByRole('checkbox', { name: /sam-android/, checked: true })), 'suggested reviewer pre-selected');
+    await page.screenshot({ path: join(SHOTS, '12-resubmit-dialog.png') });
+    await page.getByRole('dialog').getByRole('button', { name: 'Submit' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await page.waitForTimeout(300);
+    check(gh.issue(2).labels.includes('status:in-review'), 'resubmitted');
+    check(gh.issue(2).comments.at(-1)?.body.includes('Resubmitted'), 'resubmit comment');
+
+    // Close as won't test, then reopen.
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/3`);
+    await page.getByRole('button', { name: "Close as won't test" }).click();
+    await page.getByLabel('Reason (optional)').fill('Moved to the next release');
+    await page.getByRole('button', { name: 'Close case' }).click();
+    await page.getByRole('button', { name: 'Reopen' }).waitFor();
+    check(gh.issue(3).state === 'CLOSED', 'closed');
+    await page.getByRole('button', { name: 'Reopen' }).click();
+    await page.getByRole('button', { name: 'Submit for review' }).waitFor();
+    check(gh.issue(3).state === 'OPEN' && gh.issue(3).labels.includes('status:draft'), 'reopened as Draft');
+
+    // Duplicate prefills the editor; leaving asks to discard.
+    await page.getByRole('button', { name: 'Duplicate' }).click();
+    await page.waitForURL(/\/cases\/new/);
+    check((await page.getByLabel('Scenario name').inputValue()) === 'Cart persists after restart (copy)', 'duplicate prefills');
+    await page.getByRole('link', { name: 'Cancel' }).click();
+    await page.waitForURL(/\/cases(\?|$)/);
+    check(gh.issues.length === 4, 'cancelled duplicate creates nothing');
     await page.context().close();
   }
 } catch (e) {

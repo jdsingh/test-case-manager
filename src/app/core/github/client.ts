@@ -30,7 +30,7 @@ export interface RateLimit {
   resetAt: Date;
 }
 
-interface GraphQLErrorItem {
+export interface GraphQLErrorItem {
   type?: string;
   message: string;
   path?: (string | number)[];
@@ -54,6 +54,17 @@ export class GitHubClient {
     if (body.errors?.length) throw toGraphQLError(body.errors);
     if (body.data === undefined) throw new GitHubError('graphql', 'Empty GraphQL response');
     return body.data;
+  }
+
+  /** Like graphql(), but returns whatever data came back alongside per-field errors. */
+  async graphqlPartial<T>(
+    query: string,
+    variables: Record<string, unknown> = {},
+  ): Promise<{ data: Partial<T>; errors: GraphQLErrorItem[] }> {
+    const res = await this.send('POST', '/graphql', { query, variables });
+    const body = (await res.json()) as { data?: Partial<T> | null; errors?: GraphQLErrorItem[] };
+    if (!body.data && body.errors?.length) throw toGraphQLError(body.errors);
+    return { data: body.data ?? {}, errors: body.errors ?? [] };
   }
 
   async rest<T>(method: string, path: string, body?: unknown): Promise<T> {

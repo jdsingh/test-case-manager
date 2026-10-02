@@ -8,6 +8,21 @@ export interface MockUser {
   name: string;
 }
 
+export interface MockIssue {
+  number: number;
+  id: string;
+  title: string;
+  body: string;
+  state: 'OPEN' | 'CLOSED';
+  labels: string[];
+  assignees: string[];
+  comments: { id: string; body: string; createdAt: string; author: string }[];
+  projectIds: string[];
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export class MockGitHub {
   tokens = new Map<string, MockUser>();
   users: MockUser[] = [
@@ -28,6 +43,79 @@ export class MockGitHub {
   protectedBranch = false;
   pullRequests: { branch: string; title: string }[] = [];
   private commitSeq = 0;
+  issues: MockIssue[] = [];
+  private issueSeq = 0;
+  private clock = Date.parse('2026-10-01T10:00:00Z');
+  viewerLogin = '';
+
+  /** Seeds a test case issue on the Checkout v2 board (P7). */
+  addIssue(i: Partial<MockIssue> & { title: string; body: string; labels: string[] }): MockIssue {
+    const issue: MockIssue = {
+      number: ++this.issueSeq,
+      id: `I_${this.issueSeq + 1000}`,
+      state: 'OPEN',
+      assignees: [],
+      comments: [],
+      projectIds: ['P7'],
+      author: 'priya-pm',
+      createdAt: this.now(),
+      updatedAt: this.now(),
+      ...i,
+    };
+    for (const l of issue.labels) if (!this.labels.includes(l)) this.labels.push(l);
+    this.issues.push(issue);
+    return issue;
+  }
+
+  issue(n: number): MockIssue {
+    const i = this.issues.find((x) => x.number === n);
+    if (!i) throw new Error(`mock: no issue #${n}`);
+    return i;
+  }
+
+  private now(): string {
+    this.clock += 60_000;
+    return new Date(this.clock).toISOString();
+  }
+
+  private labelId(name: string): string {
+    return `LA_${name}`;
+  }
+
+  private userId(login: string): string {
+    return `U_${login}`;
+  }
+
+  private issueNode(i: MockIssue) {
+    return {
+      id: i.id,
+      number: i.number,
+      url: `https://github.com/${this.owner}/${this.name}/issues/${i.number}`,
+      title: i.title,
+      body: i.body,
+      state: i.state,
+      createdAt: i.createdAt,
+      updatedAt: i.updatedAt,
+      author: { login: i.author },
+      assignees: { nodes: i.assignees.map((login) => ({ login, avatarUrl: avatar(login) })) },
+      labels: { nodes: i.labels.map((name) => ({ name })) },
+      repository: { nameWithOwner: `${this.owner}/${this.name}` },
+    };
+  }
+
+  private applyIssueInput(i: MockIssue, input: Record<string, any>): void {
+    if (input['title'] !== undefined) i.title = input['title'];
+    if (input['body'] !== undefined) i.body = input['body'];
+    if (input['labelIds'] !== undefined) {
+      i.labels = (input['labelIds'] as string[]).map((id) => {
+        const name = id.replace(/^LA_/, '');
+        if (!this.labels.includes(name)) throw new Error(`mock: unknown label id ${id}`);
+        return name;
+      });
+    }
+    if (input['assigneeIds'] !== undefined) i.assignees = (input['assigneeIds'] as string[]).map((id) => id.replace(/^U_/, ''));
+    i.updatedAt = this.now();
+  }
 
   constructor() {
     for (const u of this.users) this.tokens.set(`tok-${u.login}`, u);
@@ -58,8 +146,72 @@ export class MockGitHub {
     const ok = (data: unknown) => json(route, 200, { data }, { 'X-OAuth-Scopes': 'repo, project' });
     const fail = (message: string, type?: string) => json(route, 200, { errors: [{ type, message }] });
 
-    if (/viewer\s*{\s*login name avatarUrl/.test(query)) {
-      return ok({ viewer: { ...viewer, avatarUrl: avatar(viewer.login) } });
+    this.viewerLogin = viewer.login;
+    if (/viewer\s*{\s*id login name avatarUrl/.test(query)) {
+      return ok({ viewer: { ...viewer, id: this.userId(viewer.login), avatarUrl: avatar(viewer.login) } });
+    }
+    // ---- test case issues ----
+    if (query.includes('items(first: 100')) {
+      const nodes = this.issues
+        .filter((i) => i.projectIds.includes(String(v['id'])))
+        .map((i) => ({ content: { __typename: 'Issue', ...this.issueNode(i) } }));
+      return ok({ node: { items: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } });
+    }
+    if (query.includes('issue(number: $number)')) {
+      const i = this.issues.find((x) => x.number === v['number']);
+      if (!i) return ok({ repository: { issue: null } });
+      return ok({
+        repository: {
+          issue: {
+            ...this.issueNode(i),
+            comments: { nodes: i.comments.map((c) => ({ ...c, url: `https://github.com/c/${c.id}`, author: { login: c.author, avatarUrl: avatar(c.author) } })) },
+            projectItems: { nodes: i.projectIds.map((id) => ({ project: { id } })) },
+          },
+        },
+      });
+    }
+    if (/u0: user\(login:/.test(query)) {
+      const data: Record<string, unknown> = {};
+      for (const m of query.matchAll(/(u\d+): user\(login: "([^"]+)"\)/g)) {
+        const u = this.users.find((x) => x.login === m[2]);
+        data[m[1]] = u ? { id: this.userId(u.login), login: u.login } : null;
+      }
+      return ok(data);
+    }
+    if (query.includes('createIssue(')) {
+      const input = v['input'];
+      const i = this.addIssue({
+        title: input.title,
+        body: input.body,
+        labels: [],
+        author: viewer.login,
+        projectIds: input.projectV2Ids ?? [],
+      });
+      this.applyIssueInput(i, input);
+      return ok({ createIssue: { issue: this.issueNode(i) } });
+    }
+    if (query.includes('updateIssue(')) {
+      const i = this.issues.find((x) => x.id === v['input'].id)!;
+      this.applyIssueInput(i, v['input']);
+      return ok({ updateIssue: { issue: this.issueNode(i) } });
+    }
+    if (query.includes('addComment(')) {
+      const i = this.issues.find((x) => x.id === v['input'].subjectId)!;
+      const c = { id: `C_${i.comments.length + 1}_${i.number}`, body: v['input'].body, createdAt: this.now(), author: viewer.login };
+      i.comments.push(c);
+      return ok({ addComment: { commentEdge: { node: { ...c, url: '', author: { login: c.author, avatarUrl: avatar(c.author) } } } } });
+    }
+    if (query.includes('closeIssue(')) {
+      const i = this.issues.find((x) => x.id === v['input'].issueId)!;
+      i.state = 'CLOSED';
+      i.updatedAt = this.now();
+      return ok({ closeIssue: { issue: this.issueNode(i) } });
+    }
+    if (query.includes('reopenIssue(')) {
+      const i = this.issues.find((x) => x.id === v['input'].issueId)!;
+      i.state = 'OPEN';
+      i.updatedAt = this.now();
+      return ok({ reopenIssue: { issue: this.issueNode(i) } });
     }
     if (/viewer\s*{\s*repositories/.test(query)) {
       return ok({
@@ -75,7 +227,7 @@ export class MockGitHub {
     }
     if (query.includes('createLabel')) {
       this.labels.push(v['input'].name);
-      return ok({ createLabel: { label: { id: 'L' } } });
+      return ok({ createLabel: { label: { id: this.labelId(v['input'].name) } } });
     }
     if (query.includes('createRef')) return ok({ createRef: { ref: { name: v['input'].name } } });
     if (query.includes('createPullRequest')) {
@@ -141,7 +293,7 @@ export class MockGitHub {
           viewerPermission: 'WRITE',
           defaultBranchRef: { name: 'main', target: { oid: this.head } },
           config: this.configText === null ? null : { text: this.configText },
-          labels: { nodes: this.labels.map((name) => ({ name })) },
+          labels: { nodes: this.labels.map((name) => ({ id: this.labelId(name), name })) },
         },
       });
     }

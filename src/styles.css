@@ -259,3 +259,80 @@ select:focus {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* ---- Test case badges ---------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.badge-p0 { background: var(--bad-soft); color: var(--bad); }
+.badge-p1 { background: var(--warn-soft); color: var(--warn); }
+.badge-p2 { background: var(--accent-soft); color: var(--accent); }
+.badge-p3 { background: var(--surface-2); color: var(--text-2); }
+.status-draft { background: var(--surface-2); color: var(--text-2); }
+.status-in-review { background: var(--warn-soft); color: var(--warn); }
+.status-changes-requested { background: var(--bad-soft); color: var(--bad); }
+.status-approved { background: var(--accent-soft); color: var(--accent); }
+.status-passed { background: var(--good-soft); color: var(--good); }
+.status-failed { background: var(--bad-soft); color: var(--bad); }
+.status-blocked { background: var(--warn-soft); color: var(--warn); }
+.status-closed { background: var(--surface-2); color: var(--text-2); text-decoration: line-through; }
+.badge-outline { background: none; border: 1px solid var(--border); font-weight: 500; }
+
+.avatars { display: inline-flex; }
+.avatars img + img { margin-left: -6px; }
+.avatars img { border: 2px solid var(--surface); }
+
+/* Gherkin rendering */
+.gherkin {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font: 13.5px/1.7 var(--mono);
+  white-space: pre-wrap;
+}
+.gherkin .kw { font-weight: 700; color: var(--accent); }
+
+dialog {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 20px;
+  width: min(440px, 92vw);
+  box-shadow: var(--shadow);
+}
+dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+textarea {
+  width: 100%;
+  min-height: 72px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+.kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font: 11px/16px var(--mono);
+  text-align: center;
+  color: var(--text-2);
+}

@@ -1,10 +1,12 @@
 // Typed GitHub operations used by the app. Each function is one GraphQL call.
 
 import { GitHubClient, GitHubError } from './client';
+import type { IssueNode } from '../testcase/model';
 
 export const CONFIG_PATH = '.testcases/config.json';
 
 export interface Viewer {
+  id: string;
   login: string;
   name: string | null;
   avatarUrl: string;
@@ -38,6 +40,8 @@ export interface RepoInfo {
   /** Raw text of .testcases/config.json on the default branch, or null if missing. */
   configText: string | null;
   labelNames: string[];
+  /** Label name (lowercased) → node id. */
+  labelIds: Record<string, string>;
 }
 
 export interface GitHubUser {
@@ -47,7 +51,7 @@ export interface GitHubUser {
 }
 
 export async function fetchViewer(gh: GitHubClient): Promise<Viewer> {
-  const data = await gh.graphql<{ viewer: Viewer }>(`query { viewer { login name avatarUrl } }`);
+  const data = await gh.graphql<{ viewer: Viewer }>(`query { viewer { id login name avatarUrl } }`);
   return data.viewer;
 }
 
@@ -78,7 +82,7 @@ interface RepoQuery {
     viewerPermission: RepoPermission | null;
     defaultBranchRef: { name: string; target: { oid: string } } | null;
     config: { text: string | null } | null;
-    labels: { nodes: { name: string }[] };
+    labels: { nodes: { id: string; name: string }[] };
   } | null;
 }
 
@@ -89,7 +93,7 @@ export async function fetchRepo(gh: GitHubClient, owner: string, name: string): 
         id name nameWithOwner owner { login } isEmpty viewerPermission
         defaultBranchRef { name target { oid } }
         config: object(expression: $configExpr) { ... on Blob { text } }
-        labels(first: 100) { nodes { name } }
+        labels(first: 100) { nodes { id name } }
       }
     }`,
     { owner, name, configExpr: `HEAD:${CONFIG_PATH}` },
@@ -107,6 +111,7 @@ export async function fetchRepo(gh: GitHubClient, owner: string, name: string): 
     headOid: r.defaultBranchRef?.target.oid ?? null,
     configText: r.config?.text ?? null,
     labelNames: r.labels.nodes.map((l) => l.name),
+    labelIds: Object.fromEntries(r.labels.nodes.map((l) => [l.name.toLowerCase(), l.id])),
   };
 }
 
@@ -179,11 +184,12 @@ export async function createLabel(
   gh: GitHubClient,
   repositoryId: string,
   label: { name: string; color: string; description: string },
-): Promise<void> {
-  await gh.graphql(
+): Promise<string> {
+  const data = await gh.graphql<{ createLabel: { label: { id: string } } }>(
     `mutation($input: CreateLabelInput!) { createLabel(input: $input) { label { id } } }`,
     { input: { repositoryId, ...label } },
   );
+  return data.createLabel.label.id;
 }
 
 export interface CommitResult {
@@ -281,4 +287,160 @@ export function toBase64(text: string): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   }
   return btoa(binary);
+}
+
+// ---- Test case issues ---------------------------------------------------------
+
+const ISSUE_FIELDS = `
+  id number url title body state createdAt updatedAt
+  author { login }
+  assignees(first: 10) { nodes { login avatarUrl } }
+  labels(first: 30) { nodes { name } }
+`;
+
+export interface CommentNode {
+  id: string;
+  body: string;
+  createdAt: string;
+  url: string;
+  author: { login: string; avatarUrl: string } | null;
+}
+
+/** All issues on a project board that belong to `nameWithOwner`, following pagination. */
+export async function fetchProjectIssues(
+  gh: GitHubClient,
+  projectId: string,
+  nameWithOwner: string,
+): Promise<IssueNode[]> {
+  const out: IssueNode[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < 20; page++) {
+    type Item = { content: (IssueNode & { __typename: string; repository: { nameWithOwner: string } }) | null };
+    const data: { node: { items: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: Item[] } } | null } =
+      await gh.graphql(
+        `query($id: ID!, $after: String) {
+          node(id: $id) {
+            ... on ProjectV2 {
+              items(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes { content { __typename ... on Issue { ${ISSUE_FIELDS} repository { nameWithOwner } } } }
+              }
+            }
+          }
+        }`,
+        { id: projectId, after },
+      );
+    if (!data.node) throw new GitHubError('not_found', 'The feature board was not found.');
+    for (const item of data.node.items.nodes) {
+      const c = item.content;
+      if (c?.__typename === 'Issue' && c.repository.nameWithOwner.toLowerCase() === nameWithOwner.toLowerCase()) {
+        out.push(c);
+      }
+    }
+    if (!data.node.items.pageInfo.hasNextPage) break;
+    after = data.node.items.pageInfo.endCursor;
+  }
+  return out;
+}
+
+export async function fetchIssue(
+  gh: GitHubClient,
+  owner: string,
+  name: string,
+  number: number,
+): Promise<{ issue: IssueNode; comments: CommentNode[]; projectIds: string[] }> {
+  const data = await gh.graphql<{
+    repository: {
+      issue: (IssueNode & { comments: { nodes: CommentNode[] }; projectItems: { nodes: { project: { id: string } }[] } }) | null;
+    };
+  }>(
+    `query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        issue(number: $number) {
+          ${ISSUE_FIELDS}
+          comments(last: 100) { nodes { id body createdAt url author { login avatarUrl } } }
+          projectItems(first: 20) { nodes { project { id } } }
+        }
+      }
+    }`,
+    { owner, name, number },
+  );
+  const issue = data.repository.issue;
+  if (!issue) throw new GitHubError('not_found', `Issue #${number} was not found.`);
+  const { comments, projectItems, ...rest } = issue;
+  return { issue: rest, comments: comments.nodes, projectIds: projectItems.nodes.map((n) => n.project.id) };
+}
+
+/** GitHub node ids for logins; unknown logins are left out. */
+export async function fetchUserIds(gh: GitHubClient, logins: string[]): Promise<Record<string, string>> {
+  const unique = [...new Set(logins.map((l) => l.toLowerCase()))].filter((l) => /^[a-z\d-]+$/.test(l));
+  if (!unique.length) return {};
+  const fields = unique.map((l, i) => `u${i}: user(login: "${l}") { id login }`).join('\n');
+  // A missing user fails only its own field, so accept partial data.
+  const { data } = await gh.graphqlPartial<Record<string, { id: string; login: string } | null>>(`query { ${fields} }`);
+  const out: Record<string, string> = {};
+  for (const u of Object.values(data)) if (u) out[u.login.toLowerCase()] = u.id;
+  return out;
+}
+
+export async function createIssue(
+  gh: GitHubClient,
+  input: {
+    repositoryId: string;
+    title: string;
+    body: string;
+    labelIds: string[];
+    assigneeIds: string[];
+    projectV2Ids?: string[];
+  },
+): Promise<IssueNode> {
+  const data = await gh.graphql<{ createIssue: { issue: IssueNode } }>(
+    `mutation($input: CreateIssueInput!) { createIssue(input: $input) { issue { ${ISSUE_FIELDS} } } }`,
+    { input },
+  );
+  return data.createIssue.issue;
+}
+
+export async function updateIssue(
+  gh: GitHubClient,
+  input: { id: string; title?: string; body?: string; labelIds?: string[]; assigneeIds?: string[] },
+): Promise<IssueNode> {
+  const data = await gh.graphql<{ updateIssue: { issue: IssueNode } }>(
+    `mutation($input: UpdateIssueInput!) { updateIssue(input: $input) { issue { ${ISSUE_FIELDS} } } }`,
+    { input },
+  );
+  return data.updateIssue.issue;
+}
+
+export async function addToProject(gh: GitHubClient, projectId: string, contentId: string): Promise<void> {
+  await gh.graphql(
+    `mutation($input: AddProjectV2ItemByIdInput!) { addProjectV2ItemById(input: $input) { item { id } } }`,
+    { input: { projectId, contentId } },
+  );
+}
+
+export async function addComment(gh: GitHubClient, subjectId: string, body: string): Promise<CommentNode> {
+  const data = await gh.graphql<{ addComment: { commentEdge: { node: CommentNode } } }>(
+    `mutation($input: AddCommentInput!) {
+      addComment(input: $input) { commentEdge { node { id body createdAt url author { login avatarUrl } } } }
+    }`,
+    { input: { subjectId, body } },
+  );
+  return data.addComment.commentEdge.node;
+}
+
+export async function closeIssue(gh: GitHubClient, issueId: string): Promise<IssueNode> {
+  const data = await gh.graphql<{ closeIssue: { issue: IssueNode } }>(
+    `mutation($input: CloseIssueInput!) { closeIssue(input: $input) { issue { ${ISSUE_FIELDS} } } }`,
+    { input: { issueId, stateReason: 'NOT_PLANNED' } },
+  );
+  return data.closeIssue.issue;
+}
+
+export async function reopenIssue(gh: GitHubClient, issueId: string): Promise<IssueNode> {
+  const data = await gh.graphql<{ reopenIssue: { issue: IssueNode } }>(
+    `mutation($input: ReopenIssueInput!) { reopenIssue(input: $input) { issue { ${ISSUE_FIELDS} } } }`,
+    { input: { issueId } },
+  );
+  return data.reopenIssue.issue;
 }

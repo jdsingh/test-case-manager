@@ -1,0 +1,289 @@
+import { Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
+import { Session } from '../session';
+import { Workspace, asGitHubError } from '../workspace';
+import { FeatureSelection } from '../feature-selection';
+import { GitHubError } from '../github/client';
+import {
+  CommentNode,
+  addComment,
+  closeIssue,
+  createIssue,
+  createLabel,
+  fetchIssue,
+  fetchProjectIssues,
+  fetchUserIds,
+  reopenIssue,
+  updateIssue,
+} from '../github/api';
+import { LABELS } from '../config/labels';
+import { Platform, TeamConfig, includesLogin, sameLogin } from '../config/team-config';
+import {
+  Status,
+  TESTCASE_LABEL,
+  TestCase,
+  TestCaseDraft,
+  describeEdit,
+  draftOf,
+  fromIssue,
+  issueTitle,
+  isScenarioChange,
+  labelsFor,
+  renderBody,
+} from './model';
+import { closeComment, editComment, submitComment } from './comments';
+
+export type CasesLoad = { status: 'idle' | 'loading' | 'ready' } | { status: 'error'; error: GitHubError };
+
+export interface CaseDetail {
+  testCase: TestCase;
+  comments: CommentNode[];
+}
+
+const REFRESH_AFTER_MS = 30_000;
+
+/** Test cases for the selected feature, and every write the app makes to them. */
+@Injectable({ providedIn: 'root' })
+export class CasesStore {
+  private readonly session = inject(Session);
+  private readonly ws = inject(Workspace);
+  private readonly features = inject(FeatureSelection);
+
+  readonly cases = signal<TestCase[]>([]);
+  readonly load = signal<CasesLoad>({ status: 'idle' });
+  private loadedFor: string | null = null;
+  private loadedAt = 0;
+  private readonly userIds = new Map<string, string>();
+
+  /** Open cases sorted P0 first, then by number. */
+  readonly openCases = computed(() =>
+    this.cases()
+      .filter((c) => !c.closed)
+      .sort((a, b) => (a.priority ?? 'P9').localeCompare(b.priority ?? 'P9') || a.number - b.number),
+  );
+
+  constructor() {
+    effect(() => {
+      const project = this.features.project();
+      const repo = this.ws.repo();
+      untracked(() => {
+        const key = project && repo ? `${repo.nameWithOwner}#${project.id}` : null;
+        if (key !== this.loadedFor) {
+          this.cases.set([]);
+          this.loadedFor = key;
+          if (key) void this.refresh();
+          else this.load.set({ status: 'idle' });
+        }
+      });
+    });
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && Date.now() - this.loadedAt > REFRESH_AFTER_MS) {
+          void this.refresh(true);
+        }
+      });
+    }
+  }
+
+  async refresh(quiet = false): Promise<void> {
+    const project = this.features.project();
+    const repo = this.ws.repo();
+    if (!project || !repo) return;
+    const key = `${repo.nameWithOwner}#${project.id}`;
+    if (!quiet) this.load.set({ status: 'loading' });
+    try {
+      const issues = await fetchProjectIssues(this.session.requireClient(), project.id, repo.nameWithOwner);
+      if (key !== this.loadedFor) return; // the feature changed meanwhile
+      this.cases.set(
+        issues.filter((i) => i.labels.nodes.some((l) => l.name.toLowerCase() === TESTCASE_LABEL)).map(fromIssue),
+      );
+      this.loadedAt = Date.now();
+      this.load.set({ status: 'ready' });
+    } catch (e) {
+      if (!quiet) this.load.set({ status: 'error', error: asGitHubError(e) });
+    }
+  }
+
+  byNumber(n: number): TestCase | null {
+    return this.cases().find((c) => c.number === n) ?? null;
+  }
+
+  async detail(number: number): Promise<CaseDetail> {
+    const repo = this.requireRepo();
+    const { issue, comments } = await fetchIssue(this.session.requireClient(), repo.owner, repo.name, number);
+    const testCase = fromIssue(issue);
+    this.upsert(testCase);
+    return { testCase, comments };
+  }
+
+  // ---- writes ------------------------------------------------------------------
+
+  /** AU-3: creates the issue on the feature board, as Draft (or straight into review). */
+  async create(draft: TestCaseDraft, opts: { submitTo?: string[] } = {}): Promise<TestCase> {
+    const repo = this.requireRepo();
+    const project = this.features.project();
+    const me = this.requireMe();
+    const status: Status = opts.submitTo ? 'in-review' : 'draft';
+    const assignees = opts.submitTo?.length ? opts.submitTo : [me];
+    const gh = this.session.requireClient();
+    const issue = await createIssue(gh, {
+      repositoryId: repo.id,
+      title: issueTitle(draft.title),
+      body: renderBody(draft),
+      labelIds: await this.labelIds(labelsFor([], { ...draft, status, regression: false })),
+      assigneeIds: await this.idsFor(assignees),
+      projectV2Ids: project ? [project.id] : [],
+    });
+    if (opts.submitTo) await addComment(gh, issue.id, submitComment(opts.submitTo, false));
+    return this.upsert(fromIssue(issue));
+  }
+
+  /**
+   * Saves an edit. A scenario change on a case past review sends it back to In review
+   * with a comment (AU-5, AU-8); changes-requested cases wait for an explicit resubmit.
+   */
+  async save(tc: TestCase, draft: TestCaseDraft): Promise<TestCase> {
+    const before = draftOf(tc);
+    const changes = describeEdit(before, draft);
+    if (!changes.length) return tc;
+    const reviewed = tc.status === 'approved' || tc.status === 'passed' || tc.status === 'failed' || tc.status === 'blocked';
+    const backToReview = reviewed && isScenarioChange(before, draft);
+    const status: Status = backToReview ? 'in-review' : (tc.status ?? 'draft');
+    const reviewers = backToReview ? this.suggestReviewers({ ...tc, platforms: draft.platforms }) : [];
+    const gh = this.session.requireClient();
+    const issue = await updateIssue(gh, {
+      id: tc.id,
+      title: issueTitle(draft.title),
+      body: renderBody(draft, tc.extraBody),
+      labelIds: await this.labelIds(labelsFor(tc.labels, { ...draft, status, regression: tc.regression })),
+      ...(backToReview ? { assigneeIds: await this.idsFor(reviewers) } : {}),
+    });
+    if (tc.status !== 'draft') {
+      await addComment(gh, tc.id, editComment(changes, backToReview, reviewers));
+    }
+    return this.upsert(fromIssue(issue));
+  }
+
+  /** AU-4 / RV-4: Draft or Changes requested → In review, assigned to the reviewers (5.3a). */
+  async submit(tc: TestCase, reviewers: string[]): Promise<TestCase> {
+    const resubmit = tc.status === 'changes-requested';
+    const gh = this.session.requireClient();
+    const issue = await updateIssue(gh, {
+      id: tc.id,
+      labelIds: await this.labelIds(this.labelsWithStatus(tc, 'in-review')),
+      assigneeIds: await this.idsFor(reviewers),
+    });
+    await addComment(gh, tc.id, submitComment(reviewers, resubmit));
+    return this.upsert(fromIssue(issue));
+  }
+
+  /** AU-7: close as Won't test. */
+  async close(tc: TestCase, reason: string): Promise<TestCase> {
+    const gh = this.session.requireClient();
+    await addComment(gh, tc.id, closeComment(reason));
+    return this.upsert(fromIssue(await closeIssue(gh, tc.id)));
+  }
+
+  /** AU-7: reopening returns a case to Draft, assigned to whoever reopened it. */
+  async reopen(tc: TestCase): Promise<TestCase> {
+    const gh = this.session.requireClient();
+    await reopenIssue(gh, tc.id);
+    const issue = await updateIssue(gh, {
+      id: tc.id,
+      labelIds: await this.labelIds(this.labelsWithStatus(tc, 'draft')),
+      assigneeIds: await this.idsFor([this.requireMe()]),
+    });
+    return this.upsert(fromIssue(issue));
+  }
+
+  // ---- reviewers (5.3a) ------------------------------------------------------------
+
+  /** Engineers allowed to review a case (RV-2). */
+  eligibleReviewers(platforms: Platform[], config: TeamConfig | null = this.ws.config()): string[] {
+    if (!config) return [];
+    const pool = platforms.flatMap((p) => config.team[p]);
+    return pool.filter((l, i) => pool.findIndex((x) => sameLogin(x, l)) === i);
+  }
+
+  /**
+   * One reviewer by default: the configured default reviewer for the case's platform,
+   * else the eligible engineer with the fewest cases waiting on them (AS-4).
+   */
+  suggestReviewers(tc: Pick<TestCase, 'platforms' | 'author'>): string[] {
+    const config = this.ws.config();
+    if (!config || !tc.platforms.length) return [];
+    const eligible = this.eligibleReviewers(tc.platforms, config);
+    if (!eligible.length) return [];
+    for (const p of tc.platforms) {
+      const d = config.assignment.defaultReviewer[p];
+      if (d && includesLogin(eligible, d)) return [d];
+    }
+    const me = this.session.viewer()?.login ?? '';
+    const load = (login: string) =>
+      this.openCases().filter((c) => c.status === 'in-review' && c.assignees.some((a) => sameLogin(a.login, login))).length;
+    const ranked = [...eligible].sort((a, b) => Number(sameLogin(a, me)) - Number(sameLogin(b, me)) || load(a) - load(b));
+    return [ranked[0]];
+  }
+
+  // ---- helpers -----------------------------------------------------------------
+
+  private labelsWithStatus(tc: TestCase, status: Status): string[] {
+    return labelsFor(tc.labels, {
+      priority: tc.priority ?? 'P2',
+      platforms: tc.platforms,
+      status,
+      regression: tc.regression,
+    });
+  }
+
+  /** Label ids for names, creating any the repo is missing (e.g. deleted by hand). */
+  private async labelIds(names: string[]): Promise<string[]> {
+    const repo = this.requireRepo();
+    const ids: string[] = [];
+    for (const name of names) {
+      let id = repo.labelIds[name.toLowerCase()];
+      if (!id) {
+        const spec = LABELS.find((l) => l.name.toLowerCase() === name.toLowerCase());
+        id = await createLabel(this.session.requireClient(), repo.id, {
+          name,
+          color: spec?.color ?? 'ededed',
+          description: spec?.description ?? '',
+        });
+        repo.labelIds[name.toLowerCase()] = id;
+      }
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  private async idsFor(logins: string[]): Promise<string[]> {
+    const missing = logins.filter((l) => !this.userIds.has(l.toLowerCase()));
+    if (missing.length) {
+      const found = await fetchUserIds(this.session.requireClient(), missing);
+      for (const [login, id] of Object.entries(found)) this.userIds.set(login, id);
+    }
+    return logins.map((l) => this.userIds.get(l.toLowerCase())).filter((x): x is string => !!x);
+  }
+
+  private upsert(tc: TestCase): TestCase {
+    this.cases.update((list) => {
+      const i = list.findIndex((c) => c.number === tc.number);
+      if (i < 0) return [...list, tc];
+      const next = [...list];
+      next[i] = tc;
+      return next;
+    });
+    return tc;
+  }
+
+  private requireRepo() {
+    const r = this.ws.repo();
+    if (!r) throw new GitHubError('not_found', 'No repo is open.');
+    return r;
+  }
+
+  private requireMe(): string {
+    const v = this.session.viewer();
+    if (!v) throw new GitHubError('auth', 'Not signed in.');
+    return v.login;
+  }
+}

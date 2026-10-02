@@ -6,6 +6,11 @@ import { RepoShell } from './features/shell/repo-shell';
 import { SetupPage } from './features/onboarding/setup.page';
 import { TeamSettingsPage } from './features/team/team-settings.page';
 import { ComingSoonPage } from './features/shell/coming-soon.page';
+import { CasesListPage } from './features/cases/cases-list.page';
+import { CaseDetailPage } from './features/cases/case-detail.page';
+import { CaseEditorPage } from './features/cases/case-editor.page';
+
+const leaveEditorGuard = (c: CaseEditorPage) => c.canLeave();
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', canActivate: [startGuard], children: [] },
@@ -21,15 +26,19 @@ export const routes: Routes = [
       { path: '', pathMatch: 'full', canActivate: [roleHomeGuard], children: [] },
       { path: 'setup', component: SetupPage, title: 'Set up · Test Case Manager' },
       { path: 'settings/team', component: TeamSettingsPage, title: 'Team settings · Test Case Manager' },
+      { path: 'cases', component: CasesListPage, title: 'Test cases · Test Case Manager' },
       {
-        path: 'cases',
-        component: ComingSoonPage,
-        title: 'Test cases · Test Case Manager',
-        data: {
-          heading: 'Test cases',
-          milestone: 'M2',
-          blurb: 'Write Given/When/Then test cases, import a Google Sheet and submit cases for review.',
-        },
+        path: 'cases/new',
+        component: CaseEditorPage,
+        canDeactivate: [leaveEditorGuard],
+        title: 'New test case · Test Case Manager',
+      },
+      { path: 'cases/:number', component: CaseDetailPage, title: 'Test case · Test Case Manager' },
+      {
+        path: 'cases/:number/edit',
+        component: CaseEditorPage,
+        canDeactivate: [leaveEditorGuard],
+        title: 'Edit test case · Test Case Manager',
       },
       {
         path: 'inbox',

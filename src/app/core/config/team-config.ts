@@ -7,6 +7,14 @@ export type Platform = 'android' | 'ios';
 export const PRIORITIES = ['P0', 'P1', 'P2', 'P3'] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
+/** Singular role names, for describing one person ("You're set up as PM, Android engineer"). */
+export const ROLE_NAMES: Record<Role, string> = {
+  pm: 'PM',
+  techLead: 'Tech lead',
+  android: 'Android engineer',
+  ios: 'iOS engineer',
+};
+
 export const ROLE_LABELS: Record<Role, string> = {
   pm: 'PM',
   techLead: 'Tech lead',

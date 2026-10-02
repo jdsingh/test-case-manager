@@ -15,7 +15,14 @@ Milestone **M1 (foundations)** is built:
 - Team settings screen: add/remove people per role with autocomplete, default reviewers, a change summary, conflict-safe saves, and a pull-request fallback for protected branches
 - GitHub Pages deploy workflow
 
-Test cases (M2), review (M3), execution and evidence (M4), the dashboard (M5) and the regression bank and Claude Code skill (M6) are placeholders.
+Milestone **M2, part 1 (test cases)** is built:
+
+- Test case list for the selected feature board, with priority/status/platform/regression filters and search (kept in the URL), status counts, and keyboard shortcuts (`/` search, `N` new)
+- Case detail: scenario, state, assignees, the latest change request, and the review history
+- Given/When/Then editor with enforced step order, live preview, step autocomplete from existing cases, a "paste Gherkin" mode and a near-duplicate warning
+- Create (optionally straight into review), edit (a scenario change on a reviewed case sends it back to review), submit/resubmit to a suggested reviewer, duplicate, close as won't test, reopen
+
+Still to come: bulk Gherkin paste and Sheets/CSV import/export (rest of M2), review (M3), execution and evidence (M4), the dashboard (M5), the regression bank and Claude Code skill (M6).
 
 ## Develop
 
