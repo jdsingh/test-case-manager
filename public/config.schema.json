@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Test Case Manager team config",
+  "description": "Lives at .testcases/config.json in the testbank repo.",
+  "type": "object",
+  "required": ["version", "team"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "team": {
+      "type": "object",
+      "description": "GitHub usernames for each role. A person can hold several roles.",
+      "properties": {
+        "pm": { "$ref": "#/$defs/logins" },
+        "techLead": { "$ref": "#/$defs/logins" },
+        "android": { "$ref": "#/$defs/logins" },
+        "ios": { "$ref": "#/$defs/logins" }
+      },
+      "additionalProperties": false
+    },
+    "project": {
+      "type": "object",
+      "description": "The default feature board.",
+      "required": ["owner", "number"],
+      "properties": {
+        "owner": { "type": "string" },
+        "number": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "features": {
+      "type": "object",
+      "description": "Per-feature settings, keyed by project number.",
+      "propertyNames": { "pattern": "^[0-9]+$" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "targetVersion": { "type": "string", "examples": ["4.12.0"] },
+          "releaseDate": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }
+        }
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "properties": {
+        "blockingPriorities": {
+          "type": "array",
+          "items": { "enum": ["P0", "P1", "P2", "P3"] },
+          "uniqueItems": true,
+          "default": ["P0"]
+        }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "properties": {
+        "defaultReviewer": {
+          "type": "object",
+          "properties": {
+            "android": { "$ref": "#/$defs/login" },
+            "ios": { "$ref": "#/$defs/login" }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "login": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
+    },
+    "logins": { "type": "array", "items": { "$ref": "#/$defs/login" }, "uniqueItems": true }
+  }
+}

@@ -1,0 +1,47 @@
+import { GitHubClient } from '../github/client';
+import { CONFIG_PATH, RepoInfo, commitFile, commitFileViaPullRequest, isProtectedBranchError } from '../github/api';
+
+export type SaveResult = { kind: 'committed'; url: string } | { kind: 'pull-request'; url: string; number: number };
+
+/**
+ * Commits the config file to the default branch, guarded by the head commit the user
+ * loaded (throws GitHubError 'conflict' if it moved). If branch protection refuses the
+ * commit, opens a pull request instead (Team settings edge cases).
+ */
+export async function saveConfigFile(
+  gh: GitHubClient,
+  repo: RepoInfo,
+  contents: string,
+  headline: string,
+  body?: string,
+): Promise<SaveResult> {
+  if (!repo.defaultBranch || !repo.headOid) {
+    throw new Error('The repo has no commits yet. Add a README on GitHub first, then try again.');
+  }
+  try {
+    const commit = await commitFile(gh, {
+      nameWithOwner: repo.nameWithOwner,
+      branch: repo.defaultBranch,
+      expectedHeadOid: repo.headOid,
+      path: CONFIG_PATH,
+      contents,
+      headline,
+      body,
+    });
+    return { kind: 'committed', url: commit.url };
+  } catch (e) {
+    if (!isProtectedBranchError(e)) throw e;
+  }
+  const pr = await commitFileViaPullRequest(gh, {
+    repositoryId: repo.id,
+    nameWithOwner: repo.nameWithOwner,
+    base: repo.defaultBranch,
+    baseOid: repo.headOid,
+    branch: `tcm/team-config-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}`,
+    path: CONFIG_PATH,
+    contents,
+    headline,
+    body,
+  });
+  return { kind: 'pull-request', url: pr.url, number: pr.number };
+}
