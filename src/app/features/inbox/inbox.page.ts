@@ -56,7 +56,7 @@ interface Group {
             <div class="row">
               <h2 [id]="'g-' + g.key">{{ g.title }}</h2>
               <span class="count">{{ g.items.length }}</span>
-              <span class="muted small">{{ g.hint }}</span>
+              <span class="muted small hint">{{ g.hint }}</span>
               @if (g.key === 'android' || g.key === 'ios') {
                 <span class="spacer"></span>
                 <a class="btn small-btn" routerLink="../session">Start test session</a>
@@ -77,9 +77,9 @@ interface Group {
                     <app-platforms [value]="i.testCase.platforms" />
                     <app-status [value]="i.testCase.status" />
                     @if (i.feature) {
-                      <span class="muted small">{{ i.feature.title }}</span>
+                      <span class="muted small nowrap">{{ i.feature.title }}</span>
                     }
-                    <span class="muted small">{{ ago(i.testCase.updatedAt) }}</span>
+                    <span class="muted small nowrap">{{ ago(i.testCase.updatedAt) }}</span>
                   </span>
                 </li>
               }
@@ -101,6 +101,14 @@ interface Group {
     .num { min-width: 32px; }
     .meta { display: flex; align-items: center; gap: 8px; }
     .small-btn { height: 28px; font-size: 13px; }
+    .meta { flex-wrap: wrap; }
+    .nowrap { white-space: nowrap; }
+    /* Phones: the title gets the room; the hint only repeats what the heading says. */
+    @media (max-width: 600px) {
+      .hint { display: none; }
+      .items li { gap: 6px; }
+      .meta { padding-left: 40px; }
+    }
   `,
 })
 export class InboxPage {

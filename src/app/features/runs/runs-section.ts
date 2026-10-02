@@ -121,6 +121,7 @@ import { RunForm } from './run-form';
     .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
     .result { padding: 12px 14px; border-left-width: 4px; display: flex; flex-direction: column; gap: 2px; }
     .card-action { align-self: flex-start; margin-top: 8px; }
+    #run-form { scroll-margin-top: 140px; }
     .res-pass { border-left-color: var(--good); }
     .res-fail { border-left-color: var(--bad); }
     .res-blocked { border-left-color: var(--warn); }

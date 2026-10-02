@@ -90,7 +90,7 @@ import { GherkinView, PlatformBadges, PriorityBadge, StatusBadge } from './badge
       <div class="row footer">
         <button class="btn btn-primary" type="button" (click)="add()" [disabled]="!picked().size || running() || !features.project()">
           @if (running()) { <span class="spinner" aria-hidden="true"></span> Adding {{ progress() }}/{{ picked().size }}… } @else {
-            Add {{ picked().size }} to {{ features.project()?.title ?? 'feature' }}
+            @if (picked().size) { Add {{ picked().size }} to {{ features.project()?.title ?? 'feature' }} } @else { Pick cases to add }
           }
         </button>
         <span class="spacer"></span>

@@ -205,7 +205,8 @@ import { avatarAt } from '../../core/avatar';
     /* Phones: brand and controls on one row, the nav scrolls sideways underneath. */
     @media (max-width: 760px) {
       .top-inner { flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px 10px; }
-      .nav { order: 3; width: 100%; margin-left: 0; overflow-x: auto; scrollbar-width: none; }
+      .nav { order: 3; width: 100%; margin-left: 0; flex-wrap: wrap; gap: 2px; }
+      .nav a { padding: 6px 8px; }
       .jump { display: none; }
       .feature select { max-width: 150px; }
       .banners { padding: 0 12px; }

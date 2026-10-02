@@ -9,7 +9,8 @@ import { Platform, includesLogin } from '../../core/config/team-config';
 import { PLATFORM_NAMES, TestCase } from '../../core/testcase/model';
 import { Environment, RunEvent, RunMeta, RunResult, canRun, runsOf } from '../../core/testcase/runs';
 import { timeAgo } from '../../core/time';
-import { loadRunDefaults, saveRunDefaults } from '../../core/testcase/run-defaults';
+import { lastOwnRun, loadRunDefaults, saveRunDefaults } from '../../core/testcase/run-defaults';
+import { CommentNode, fetchProjectComments } from '../../core/github/api';
 import { bugBody, bugTitle } from '../../core/testcase/bug-report';
 import { asGitHubError } from '../../core/workspace';
 import { PriorityBadge } from '../cases/badges';
@@ -309,6 +310,8 @@ export class SessionPage {
     return s.cases.map((n) => this.store.byNumber(n)).filter((c): c is TestCase => !!c);
   });
   protected readonly current = computed(() => this.sessionCases()[this.index()] ?? null);
+  /** Which case is showing. A background refresh replaces the case object but not this. */
+  private readonly currentNumber = computed(() => this.current()?.number ?? null);
   protected readonly doneCount = computed(() => Object.keys(this.results()).length);
   protected readonly tally = computed(() =>
     (['pass', 'fail', 'blocked'] as RunResult[])
@@ -332,9 +335,10 @@ export class SessionPage {
   constructor() {
     this.pickPlatform(this.platforms[0]);
     effect(() => {
-      const tc = this.current();
+      this.currentNumber();
       const platform = this.setup()?.platform;
       untracked(() => {
+        const tc = this.current();
         this.lastRun.set(null);
         if (!tc || !platform || !tc.labels.some((l) => l === `run:${platform}:failed` || l === `run:${platform}:blocked`)) return;
         void this.store.detail(tc.number).then(({ comments }) => {
@@ -346,7 +350,7 @@ export class SessionPage {
     });
     // A fresh case starts with no ticks, notes or files.
     effect(() => {
-      this.current();
+      this.currentNumber();
       untracked(() => {
         this.ticked.set(new Set());
         this.notes.set('');
@@ -364,6 +368,26 @@ export class SessionPage {
     this.form.device.set(d.device);
     this.form.os.set(d.os);
     this.form.env.set(d.env);
+    if (!d.device && !d.os) void this.fillFromHistory(p);
+  }
+
+  /** A browser with nothing saved: borrow device and OS from the person's last run in this feature. */
+  private history: Promise<Map<number, CommentNode[]>> | null = null;
+  private async fillFromHistory(p: Platform): Promise<void> {
+    const project = this.features.project();
+    const repo = this.ws.repo();
+    if (!project || !repo) return;
+    try {
+      this.history ??= fetchProjectComments(this.session.requireClient(), project.id, repo.nameWithOwner);
+      const last = lastOwnRun((await this.history).values(), this.me(), p);
+      // Only if the person hasn't started typing or switched platform meanwhile.
+      if (!last || this.form.platform() !== p || this.form.device() || this.form.os()) return;
+      this.form.device.set(last.device);
+      this.form.os.set(last.os);
+      this.form.env.set(last.env);
+    } catch {
+      this.history = null; // a nicety only; the person can type the details
+    }
   }
 
   protected start(): void {

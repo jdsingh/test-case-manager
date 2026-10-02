@@ -920,6 +920,18 @@ Scenario: Order history shows the new order
     check(await shows(blockersCard.getByText('jo-ios').first()), 'blocking cases show who has them');
     await page.getByRole('link', { name: /^Inbox/ }).click();
     check(await shows(page.getByText("Tech leads aren't usually assigned cases")), 'tech lead\'s empty inbox points to the dashboard');
+    await page.getByLabel('Viewing as').selectOption('jo-ios');
+    await page.waitForURL(/\/inbox/);
+    await page.getByRole('link', { name: 'Start test session' }).first().click();
+    if (await page.getByRole('button', { name: 'End session' }).isVisible()) await page.getByRole('button', { name: 'End session' }).click();
+    check(await shows(page.getByLabel('Device').and(page.locator('[value="iPhone 15"]'))) || (await page.getByLabel('Device').inputValue()) === 'iPhone 15', 'session form fills the device from your last run');
+    await page.getByRole('button', { name: 'Start session' }).click();
+    check(await shows(page.getByText('Last run on iOS: failed')), 'session shows the last failed run (after the case refreshes)');
+    await page.getByText('Given', { exact: true }).first().click();
+    await page.getByLabel('Notes').fill('Still failing');
+    await page.waitForTimeout(800);
+    check((await page.getByLabel('Notes').inputValue()) === 'Still failing', 'a background refresh keeps the notes being typed');
+    await page.getByRole('button', { name: 'End session' }).click();
 
     await page.getByRole('button', { name: 'Exit sample data' }).click();
     await page.waitForURL(/\/connect/);
