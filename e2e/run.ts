@@ -364,6 +364,58 @@ try {
     await page.getByRole('link', { name: 'Cancel' }).click();
     await page.waitForURL(/\/cases(\?|$)/);
     check(gh.issues.length === 4, 'cancelled duplicate creates nothing');
+
+    // Import from a Google Sheets paste (IM-1 to IM-3).
+    console.log('Import and export');
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/import`);
+    const sheet = [
+      'Test case\tPriority\tPlatform\tGiven\tWhen\tExpected result',
+      'Login with email\tHigh\tBoth\ta registered user\t"enters email\nand taps Log in"\tthe home screen shows',
+      'Guest checkout with saved card\tP0\tBoth\ta guest\tpays\tit works',
+      'Broken row\tP1\tAndroid\t\tdoes something\t',
+    ].join('\n');
+    await page.getByLabel(/Paste the cells from Google Sheets/).fill(sheet);
+    check(await shows(page.getByText('1 ready · 1 already exist · 1 need fixing')), 'preview sorts rows into ready / exists / invalid');
+    check((await page.getByLabel('Then / expected result').inputValue()) === '5', 'columns auto-mapped from headers');
+    await page.screenshot({ path: join(SHOTS, '13-import-preview.png'), fullPage: true });
+    await page.getByRole('button', { name: 'Import 1 as draft' }).click();
+    await page.getByText('Created 1 test case as drafts.').waitFor({ timeout: 15000 });
+    const imported = gh.issues.at(-1)!;
+    check(imported.title === '[TC] Login with email' && imported.labels.includes('status:draft') && imported.labels.includes('priority:P1'), 'imported as a P1 draft');
+    check(imported.projectIds.includes('P7') && imported.body.includes('    And taps Log in'), 'on the board, multi-line cell became And');
+    await page.getByLabel(/Paste the cells from Google Sheets/).fill(sheet + '\n');
+    check(await shows(page.getByText('0 ready · 2 already exist · 1 need fixing')), 're-running skips cases already imported');
+
+    // Bulk Gherkin paste with tags (AU-6).
+    await page.getByRole('tab', { name: 'Gherkin' }).click();
+    await page.getByLabel(/Paste one or more scenarios/).fill(`@P0 @ios
+Scenario: Apple Pay checkout
+  Given a cart with one item
+  When the user pays with Apple Pay
+  Then the order is placed
+
+@P3
+Scenario: Order history shows the new order
+  Given a completed order
+  When the user opens order history
+  Then the order is listed first`);
+    check(await shows(page.getByText('2 ready · 0 already exist · 0 need fixing')), 'two scenarios parsed');
+    const before = gh.issues.length;
+    await page.getByRole('button', { name: 'Import 2 as drafts' }).click();
+    await page.getByText('Created 2 test cases as drafts.').waitFor({ timeout: 15000 });
+    const applePay = gh.issues.find((i) => i.title === '[TC] Apple Pay checkout')!;
+    check(gh.issues.length === before + 2, 'both created');
+    check(applePay.labels.includes('priority:P0') && applePay.labels.includes('platform:ios') && !applePay.labels.includes('platform:android'), 'tags set priority and platform');
+
+    // Export the list to CSV (IM-4).
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases`);
+    await rows.first().waitFor();
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export CSV' }).click()]);
+    const csv = await Bun.file((await dl.path())!).text();
+    const { parseDelimited } = await import('../src/app/core/import/csv');
+    const table = parseDelimited(csv);
+    check(dl.suggestedFilename().endsWith('.csv') && table.length === 1 + (await rows.count()), 'CSV has a row per listed case');
+    check(table[0].includes('Latest Android run') && table.some((r) => r[1] === 'Apple Pay checkout'), 'CSV columns and content');
     await page.context().close();
   }
 } catch (e) {

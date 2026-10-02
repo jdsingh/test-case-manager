@@ -9,6 +9,7 @@ import { ComingSoonPage } from './features/shell/coming-soon.page';
 import { CasesListPage } from './features/cases/cases-list.page';
 import { CaseDetailPage } from './features/cases/case-detail.page';
 import { CaseEditorPage } from './features/cases/case-editor.page';
+import { ImportPage } from './features/cases/import.page';
 
 const leaveEditorGuard = (c: CaseEditorPage) => c.canLeave();
 
@@ -32,6 +33,12 @@ export const routes: Routes = [
         component: CaseEditorPage,
         canDeactivate: [leaveEditorGuard],
         title: 'New test case · Test Case Manager',
+      },
+      {
+        path: 'cases/import',
+        component: ImportPage,
+        canDeactivate: [(c: ImportPage) => c.canLeave()],
+        title: 'Import · Test Case Manager',
       },
       { path: 'cases/:number', component: CaseDetailPage, title: 'Test case · Test Case Manager' },
       {

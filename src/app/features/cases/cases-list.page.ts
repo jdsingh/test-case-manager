@@ -8,6 +8,7 @@ import { CasesStore } from '../../core/testcase/cases-store';
 import { PRIORITIES, Platform, Priority } from '../../core/config/team-config';
 import { STATUSES, STATUS_LABELS, Status, TestCase } from '../../core/testcase/model';
 import { timeAgo } from '../../core/time';
+import { casesToCsv, download } from '../../core/import/export';
 import { Avatars, PlatformBadges, PriorityBadge, StatusBadge } from './badges';
 
 interface Filters {
@@ -37,7 +38,11 @@ interface Filters {
           }
         </div>
         <span class="spacer"></span>
+        @if (features.project() && store.cases().length) {
+          <button class="btn" type="button" (click)="exportCsv()" title="Download the cases shown below as CSV">Export CSV</button>
+        }
         @if (ws.canWriteRepo() && features.project()) {
+          <a class="btn" routerLink="import" queryParamsHandling="preserve">Import</a>
           <a class="btn btn-primary" routerLink="new" queryParamsHandling="preserve" title="New test case (N)">
             New test case
           </a>
@@ -118,10 +123,13 @@ interface Filters {
               <section class="card stack empty">
                 <h2>No test cases yet</h2>
                 <p class="muted">
-                  Write the first one, or draft a batch with the Claude Code skill in this repo.
+                  Write the first one, import your existing Google Sheet, or paste a batch of Gherkin scenarios.
                 </p>
                 @if (ws.canWriteRepo()) {
-                  <div><a class="btn btn-primary" routerLink="new" queryParamsHandling="preserve">New test case</a></div>
+                  <div class="row">
+                    <a class="btn btn-primary" routerLink="new" queryParamsHandling="preserve">New test case</a>
+                    <a class="btn" routerLink="import" queryParamsHandling="preserve">Import a sheet</a>
+                  </div>
                 }
               </section>
             } @else if (shown().length === 0) {
@@ -291,6 +299,12 @@ export class CasesListPage {
 
   protected toggleStatus(s: Status): void {
     this.set({ status: this.filters().status === s ? '' : s });
+  }
+
+  protected exportCsv(): void {
+    const feature = this.features.project()?.title ?? 'test-cases';
+    const slug = feature.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    download(`${slug}-test-cases-${new Date().toISOString().slice(0, 10)}.csv`, casesToCsv(this.shown()));
   }
 
   protected clear(): void {

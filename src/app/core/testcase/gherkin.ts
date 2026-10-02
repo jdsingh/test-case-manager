@@ -11,6 +11,8 @@ export interface Step {
 export interface Scenario {
   name: string;
   steps: Step[];
+  /** Tags written above the scenario, without the @ (e.g. ["P0", "android"]). */
+  tags?: string[];
 }
 
 const STEP_RE = /^\s*(Given|When|Then|And|But)\b\s*(.*)$/i;
@@ -78,12 +80,18 @@ export function renderGherkin(s: Scenario): string {
 export function parseGherkin(text: string): Scenario[] {
   const scenarios: Scenario[] = [];
   let current: Scenario | null = null;
+  let pendingTags: string[] = [];
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
-    if (!line || line.startsWith('#') || line.startsWith('@') || /^Feature:/i.test(line)) continue;
+    if (line.startsWith('@')) {
+      pendingTags.push(...line.split(/\s+/).filter((t) => t.startsWith('@')).map((t) => t.slice(1)));
+      continue;
+    }
+    if (!line || line.startsWith('#') || /^Feature:/i.test(line)) continue;
     const sc = SCENARIO_RE.exec(line);
     if (sc) {
-      current = { name: sc[1].trim(), steps: [] };
+      current = { name: sc[1].trim(), steps: [], tags: pendingTags };
+      pendingTags = [];
       scenarios.push(current);
       continue;
     }

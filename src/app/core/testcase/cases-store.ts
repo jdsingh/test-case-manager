@@ -41,6 +41,8 @@ export interface CaseDetail {
 
 const REFRESH_AFTER_MS = 30_000;
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /** Test cases for the selected feature, and every write the app makes to them. */
 @Injectable({ providedIn: 'root' })
 export class CasesStore {
@@ -135,6 +137,39 @@ export class CasesStore {
     });
     if (opts.submitTo) await addComment(gh, issue.id, submitComment(opts.submitTo, false));
     return this.upsert(fromIssue(issue));
+  }
+
+  /**
+   * Creates many drafts one after another (IM-3). GitHub limits how fast content can be
+   * created, so requests are spaced out, and a rate-limit error waits and retries.
+   * Already-created cases stay created if the run stops; a re-run skips them by name.
+   */
+  async createMany(
+    drafts: TestCaseDraft[],
+    progress: (p: { done: number; total: number; waiting: boolean }) => void,
+    cancelled: () => boolean,
+    spacingMs = 1000,
+  ): Promise<{ created: TestCase[]; error: GitHubError | null }> {
+    const created: TestCase[] = [];
+    for (const draft of drafts) {
+      if (cancelled()) break;
+      const started = Date.now();
+      for (let attempt = 0; ; attempt++) {
+        try {
+          created.push(await this.create(draft));
+          break;
+        } catch (e) {
+          const err = asGitHubError(e);
+          if (err.kind !== 'rate_limited' || attempt >= 2) return { created, error: err };
+          progress({ done: created.length, total: drafts.length, waiting: true });
+          await sleep(60_000 * (attempt + 1));
+        }
+      }
+      progress({ done: created.length, total: drafts.length, waiting: false });
+      const wait = spacingMs - (Date.now() - started);
+      if (wait > 0 && created.length < drafts.length) await sleep(wait);
+    }
+    return { created, error: null };
   }
 
   /**
