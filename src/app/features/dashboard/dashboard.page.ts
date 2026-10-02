@@ -9,6 +9,7 @@ import { PRIORITIES, Platform, Priority, setFeatureSettings } from '../../core/c
 import { saveConfigFile } from '../../core/config/save-config';
 import { PLATFORM_NAMES, STATUSES, STATUS_LABELS, TestCase } from '../../core/testcase/model';
 import {
+  blockers,
   burndown,
   changesSince,
   platformProgress,
@@ -88,6 +89,34 @@ interface Problem {
           </div>
         </section>
 
+        @if (blockerList().length) {
+          <section class="card stack" aria-labelledby="blockers-h">
+            <h2 class="h-small" id="blockers-h">Blocking release <span class="count">{{ blockerList().length }}</span></h2>
+            <ul class="blockers">
+              @for (b of shownBlockers(); track b.tc.number) {
+                <li>
+                  <app-priority [value]="b.tc.priority" />
+                  <a [routerLink]="['../cases', b.tc.number]" queryParamsHandling="preserve">#{{ b.tc.number }} {{ b.tc.title }}</a>
+                  <span class="gaps">
+                    @if (b.unapproved) {
+                      <span class="badge badge-outline">not approved yet</span>
+                    }
+                    @for (g of b.gaps; track g.platform) {
+                      <span [class]="'badge gap-' + g.state">{{ gapIcon[g.state] }} {{ names[g.platform] }} {{ gapWord[g.state] }}</span>
+                    }
+                  </span>
+                  <span class="small muted owner">
+                    @if (b.tc.assignees.length) { {{ ownerNames(b.tc) }} } @else { nobody assigned }
+                  </span>
+                </li>
+              }
+            </ul>
+            @if (blockerList().length > shownBlockers().length) {
+              <button class="btn btn-link small" type="button" (click)="allBlockers.set(true)">Show all {{ blockerList().length }}</button>
+            }
+          </section>
+        }
+
         <section class="two">
           <div class="card stack">
             <h2 class="h-small">Runs per platform</h2>
@@ -109,7 +138,7 @@ interface Problem {
 
         <section class="card stack">
           <h2 class="h-small">Test cases by priority and status</h2>
-          <div class="scroll-x">
+          <div class="scroll-x wide-only">
           <table class="grid-table">
             <thead>
               <tr>
@@ -137,6 +166,35 @@ interface Problem {
             </tbody>
           </table>
           </div>
+          <!-- Phones: statuses down the side so the table fits without scrolling sideways. -->
+          <table class="grid-table narrow-only">
+            <thead>
+              <tr>
+                <th scope="col">Status</th>
+                @for (p of priorities; track p) { <th scope="col"><app-priority [value]="p" /></th> }
+              </tr>
+            </thead>
+            <tbody>
+              @for (s of statuses; track s) {
+                <tr>
+                  <th scope="row">{{ statusLabels[s] }}</th>
+                  @for (p of priorities; track p) {
+                    <td>
+                      @if (grid()[p][s]; as n) {
+                        <a [class]="'cell c-' + s" routerLink="../cases" [queryParams]="{ priority: p, status: s }" queryParamsHandling="merge">{{ n }}</a>
+                      } @else {
+                        <span class="zero">·</span>
+                      }
+                    </td>
+                  }
+                </tr>
+              }
+              <tr>
+                <th scope="row">Total</th>
+                @for (p of priorities; track p) { <td class="total">{{ rowTotal(p) }}</td> }
+              </tr>
+            </tbody>
+          </table>
         </section>
 
         <section class="card stack">
@@ -223,6 +281,11 @@ interface Problem {
     .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 16px; }
     @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
     .scroll-x { overflow-x: auto; }
+    .narrow-only { display: none; }
+    @media (max-width: 600px) {
+      .wide-only { display: none; }
+      .narrow-only { display: table; min-width: 0; }
+    }
     .grid-table { min-width: 640px; width: 100%; border-collapse: collapse; font-size: 13px; }
     .grid-table th, .grid-table td { padding: 6px 8px; text-align: center; border-bottom: 1px solid var(--border); }
     .grid-table th:first-child { text-align: left; }
@@ -238,6 +301,15 @@ interface Problem {
     .problems li { display: flex; flex-direction: column; gap: 4px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
     .problems li:last-child { border-bottom: none; padding-bottom: 0; }
     .res-fail { background: var(--bad-soft); color: var(--bad); }
+    .count { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--text); margin-left: 4px; }
+    .blockers { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+    .blockers li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .blockers li:last-child { border-bottom: none; }
+    .gaps { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+    .owner { margin-left: auto; }
+    .gap-fail { background: var(--bad-soft); color: var(--bad); }
+    .gap-blocked { background: var(--warn-soft); color: var(--warn); }
+    .gap-none { background: var(--surface-2); color: var(--text-2); }
     .res-blocked { background: var(--warn-soft); color: var(--warn); }
     .changes { gap: 6px; font-size: 13.5px; }
     .day { font-size: 12px; font-weight: 600; color: var(--text-2); margin-top: 4px; }
@@ -277,6 +349,15 @@ export class DashboardPage {
   protected readonly canEdit = computed(() => this.ws.canEditTeam());
 
   protected readonly v = computed(() => verdict(this.store.cases(), this.blocking(), this.target()));
+  /** RR-1 by name: which cases stand between the feature and "ready", and who has them. */
+  protected readonly blockerList = computed(() => blockers(this.store.cases(), this.blocking()));
+  protected readonly allBlockers = signal(false);
+  protected readonly shownBlockers = computed(() => (this.allBlockers() ? this.blockerList() : this.blockerList().slice(0, 8)));
+  protected readonly gapIcon = { fail: '✗', blocked: '⛔', none: '○' } as const;
+  protected readonly gapWord = { fail: 'failed', blocked: 'blocked', none: 'not run' } as const;
+  protected ownerNames(tc: TestCase): string {
+    return tc.assignees.map((a) => a.login).join(', ');
+  }
   protected readonly grid = computed(() => statusGrid(this.store.cases()));
   protected readonly progress = computed(() =>
     platformProgress(this.store.cases()).filter((p) => p.total > 0 || this.store.cases().some((c) => c.platforms.includes(p.platform))),

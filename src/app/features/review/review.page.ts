@@ -60,6 +60,8 @@ import { ReviewPanel } from './review-panel';
                       <span class="muted">#{{ tc.number }}</span>
                       @if (assignedToMe(tc)) {
                         <span class="mine">assigned to you</span>
+                      } @else if (tc.assignees.length) {
+                        <span class="muted small">assigned to {{ assigneeNames(tc) }}</span>
                       }
                     </span>
                     <span class="t">{{ tc.title }}</span>
@@ -206,6 +208,10 @@ export class ReviewPage {
         if (n && n !== this.commentsFor()) void this.loadDetail(n);
       });
     });
+  }
+
+  protected assigneeNames(tc: TestCase): string {
+    return tc.assignees.map((a) => a.login).join(', ');
   }
 
   protected assignedToMe(tc: TestCase): boolean {

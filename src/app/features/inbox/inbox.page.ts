@@ -40,6 +40,13 @@ interface Group {
         <section class="card stack">
           <h2>You're all caught up</h2>
           <p class="muted">Nothing is assigned to you right now. When a case needs your review or a run, it shows up here.</p>
+          @if (ws.roles().includes('techLead')) {
+            <p>
+              Tech leads aren't usually assigned cases. The
+              <a routerLink="../dashboard" queryParamsHandling="preserve">dashboard</a>
+              shows what's blocking the release and who has it.
+            </p>
+          }
         </section>
       }
 

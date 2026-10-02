@@ -3,7 +3,7 @@ import { CommentNode } from '../github/api';
 import { IssueNode, fromIssue, renderBody } from './model';
 import { reviewComment, submitComment } from './comments';
 import { RunMeta, bugComment, runComment } from './runs';
-import { burndown, changesSince, platformProgress, readinessReport, statusGrid, verdict } from './readiness';
+import { blockers, burndown, changesSince, platformProgress, readinessReport, statusGrid, verdict } from './readiness';
 import { setFeatureSettings, parseConfig } from '../config/team-config';
 
 let num = 0;
@@ -135,5 +135,24 @@ describe('feature settings', () => {
       expect(parsed.config.features['3']).toEqual({ targetVersion: '1.0' });
       expect(parsed.raw['x']).toBe(1);
     }
+  });
+});
+
+describe('blockers', () => {
+  test('lists the blocking cases by name, failures first, with what each platform still needs', () => {
+    num = 0;
+    const cases = [
+      tc('P0', 'passed', ['android', 'ios'], ['run:android:passed', 'run:ios:passed']),
+      tc('P0', 'approved', ['android', 'ios'], ['run:android:passed']),
+      tc('P0', 'failed', ['android', 'ios'], ['run:ios:failed']),
+      tc('P0', 'in-review', ['ios']),
+      tc('P1', 'failed', ['ios'], ['run:ios:failed']),
+      tc('P0', 'failed', ['ios'], ['run:ios:failed'], true),
+    ];
+    const b = blockers(cases, ['P0']);
+    expect(b.map((x) => x.tc.number)).toEqual([3, 2, 4]);
+    expect(b[0].gaps).toEqual([{ platform: 'ios', state: 'fail' }, { platform: 'android', state: 'none' }]);
+    expect(b[1].gaps).toEqual([{ platform: 'ios', state: 'none' }]);
+    expect(b[2].unapproved).toBe(true);
   });
 });

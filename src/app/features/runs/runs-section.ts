@@ -2,7 +2,8 @@ import { Component, computed, inject, input, output, signal } from '@angular/cor
 import { Workspace } from '../../core/workspace';
 import { FeatureSelection } from '../../core/feature-selection';
 import { CommentNode } from '../../core/github/api';
-import { Platform } from '../../core/config/team-config';
+import { Platform, includesLogin, sameLogin } from '../../core/config/team-config';
+import { Session } from '../../core/session';
 import { PLATFORM_NAMES, TestCase } from '../../core/testcase/model';
 import { RESULT_LABELS, RunEvent, bugsOf, canRun, latestRuns, runsOf, sameVersion } from '../../core/testcase/runs';
 import { historyOf } from '../../core/testcase/review';
@@ -38,10 +39,10 @@ import { RunForm } from './run-form';
                   <button class="btn btn-link small card-action" type="button" (click)="openFor(p)">Run again</button>
                 }
                 @case (undefined) {
-                  <button class="btn btn-primary small card-action" type="button" (click)="openFor(p)">Record {{ names[p] }} run</button>
+                  <button class="btn small card-action" [class.btn-primary]="mine(p)" type="button" (click)="openFor(p)">Record {{ names[p] }} run</button>
                 }
                 @default {
-                  <button class="btn btn-primary small card-action" type="button" (click)="openFor(p)">Re-run on {{ names[p] }}</button>
+                  <button class="btn small card-action" [class.btn-primary]="mine(p)" type="button" (click)="openFor(p)">Re-run on {{ names[p] }}</button>
                 }
               }
             }
@@ -54,6 +55,7 @@ import { RunForm } from './run-form';
           <app-run-form
             [tc]="tc()"
             [platform]="fp"
+            [previous]="previousRun(fp)"
             (recorded)="changed.emit()"
             (done)="formPlatform.set(null); changed.emit()"
             (cancelled)="formPlatform.set(null)"
@@ -138,6 +140,7 @@ import { RunForm } from './run-form';
 export class RunsSection {
   private readonly ws = inject(Workspace);
   private readonly features = inject(FeatureSelection);
+  private readonly session = inject(Session);
 
   readonly tc = input.required<TestCase>();
   readonly comments = input<CommentNode[]>([]);
@@ -170,6 +173,18 @@ export class RunsSection {
       .flatMap((c) => githubAttachments(c.body).map((a) => ({ ...a, author: c.author?.login ?? 'ghost' }))),
   );
   protected readonly runnable = computed(() => canRun(this.tc()) && this.ws.canWriteRepo() && !this.ws.isViewerOnly());
+
+  /** Only the viewer's own platforms get a primary button; others can still record. */
+  protected mine(p: Platform): boolean {
+    const me = this.session.viewer()?.login ?? '';
+    return includesLogin(this.ws.config()?.team[p] ?? [], me);
+  }
+
+  /** The viewer's own latest run on a platform, to prefill device and OS. */
+  protected previousRun(p: Platform): RunEvent | null {
+    const me = this.session.viewer()?.login ?? '';
+    return this.runs().filter((r) => r.platform === p && sameLogin(r.author, me)).at(-1) ?? null;
+  }
 
   protected counts(r: RunEvent): boolean {
     return Object.values(this.latest()).some((l) => l?.id === r.id);

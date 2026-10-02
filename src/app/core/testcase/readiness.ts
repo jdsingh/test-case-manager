@@ -121,6 +121,37 @@ export function verdict(cases: TestCase[], blocking: Priority[], targetVersion: 
   };
 }
 
+export interface Blocker {
+  tc: TestCase;
+  /** What each target platform still needs, worst first. */
+  gaps: { platform: Platform; state: 'fail' | 'blocked' | 'none' }[];
+  /** The case can't be run yet because it isn't approved. */
+  unapproved: boolean;
+}
+
+/** The cases standing between the feature and "ready", worst first: what the verdict counts, by name. */
+export function blockers(cases: TestCase[], blocking: Priority[]): Blocker[] {
+  const rank = { fail: 0, blocked: 1, none: 2 } as const;
+  return cases
+    .filter((c) => !c.closed && !!c.priority && blocking.includes(c.priority))
+    .map((tc) => {
+      const unapproved = !canRun(tc);
+      const gaps = unapproved
+        ? []
+        : tc.platforms
+            .map((platform) => ({ platform, state: slotResult(tc, platform) }))
+            .filter((g): g is Blocker['gaps'][number] => g.state !== 'pass')
+            .sort((a, b) => rank[a.state] - rank[b.state]);
+      return { tc, gaps, unapproved };
+    })
+    .filter((b) => b.unapproved || b.gaps.length)
+    .sort((a, b) => score(a) - score(b) || a.tc.number - b.tc.number);
+
+  function score(b: Blocker): number {
+    return b.unapproved ? 3 : rank[b.gaps[0].state];
+  }
+}
+
 // ---- burndown (RR-2) ----------------------------------------------------------
 
 export interface BurndownPoint {
@@ -202,7 +233,7 @@ export function changesSince(cases: TestCase[], comments: Map<number, CommentNod
       } else if (m.kind === 'run') {
         const r = m.data['result'];
         const kind = r === 'pass' ? 'pass' : r === 'fail' ? 'fail' : 'blocked';
-        const word = kind === 'pass' ? 'passed' : kind === 'fail' ? 'failed' : 'was blocked';
+        const word = kind === 'pass' ? 'passed' : kind === 'fail' ? 'failed' : 'got blocked';
         out.push({ ...base, kind, text: `${word} on ${plat} v${String(m.data['appVersion'] ?? '?')}` });
       } else if (m.kind === 'bug') {
         out.push({ ...base, kind: 'bug', text: `filed a bug${plat ? ` for ${plat}` : ''}` });

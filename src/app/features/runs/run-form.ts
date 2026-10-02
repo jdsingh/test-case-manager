@@ -150,6 +150,8 @@ export class RunForm {
   readonly tc = input.required<TestCase>();
   /** Platform to start on; defaults to the user's own. */
   readonly platform$ = input<Platform | null>(null, { alias: 'platform' });
+  /** The viewer's last run on this platform; fills device and OS when this browser has none saved. */
+  readonly previous = input<RunEvent | null>(null);
   readonly recorded = output<RunEvent | null>();
   readonly done = output<void>();
   readonly cancelled = output<void>();
@@ -202,11 +204,12 @@ export class RunForm {
   protected setPlatform(p: Platform): void {
     this.platform.set(p);
     const d = loadRunDefaults(p);
+    const prev = this.previous()?.platform === p ? this.previous() : null;
     this.appVersion.set(d.appVersion || this.target() || '');
     this.build.set(d.build);
-    this.device.set(d.device);
-    this.os.set(d.os);
-    this.env.set(d.env);
+    this.device.set(d.device || prev?.device || '');
+    this.os.set(d.os || prev?.os || '');
+    this.env.set(d.device ? d.env : (prev?.env ?? d.env));
   }
 
   protected async submit(): Promise<void> {

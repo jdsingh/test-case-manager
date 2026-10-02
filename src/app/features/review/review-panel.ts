@@ -24,6 +24,13 @@ import { CaseHistory, Decision, canReview } from '../../core/testcase/review';
             [value]="noteText()"
             (input)="noteText.set($any($event.target).value)"
           ></textarea>
+          @if (openSuggestions().length) {
+            <p class="small">
+              ⚠ {{ openSuggestions().length === 1 ? 'A suggested rewording' : openSuggestions().length + ' suggested rewordings' }}
+              (step {{ suggestionSteps() }}) {{ openSuggestions().length === 1 ? "hasn't" : "haven't" }} been applied.
+              Approving keeps the current wording; request changes if it should be applied first.
+            </p>
+          }
           @if (error()) {
             <div class="banner banner-bad small" role="alert">{{ error() }}</div>
           }
@@ -66,6 +73,14 @@ export class ReviewPanel {
 
   protected readonly check = computed(() =>
     canReview(this.tc(), this.history(), this.ws.config(), this.session.viewer()?.login ?? ''),
+  );
+
+  /** Suggestions on steps whose wording hasn't changed since. */
+  protected readonly openSuggestions = computed(() =>
+    this.history().lineNotes.filter((n) => n.suggestion !== null && this.tc().steps[n.step]?.text === n.original),
+  );
+  protected readonly suggestionSteps = computed(() =>
+    [...new Set(this.openSuggestions().map((n) => n.step + 1))].join(', '),
   );
 
   protected platformName(p: 'android' | 'ios'): string {

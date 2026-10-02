@@ -1,4 +1,4 @@
-import { Component, HostListener, computed, effect, inject, signal, untracked } from '@angular/core';
+import { Component, ElementRef, HostListener, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Workspace } from '../../core/workspace';
 import { Session } from '../../core/session';
@@ -83,7 +83,7 @@ const KEY = 'tcm.session';
         <header class="bar">
           <strong>{{ names[setup()!.platform] }}</strong>
           <span>v{{ setup()!.appVersion }}{{ setup()!.build ? ' (' + setup()!.build + ')' : '' }}</span>
-          <span class="muted">{{ setup()!.device }} {{ setup()!.os }} · {{ setup()!.env }}</span>
+          <span class="muted">{{ deviceLine() }}</span>
           <span class="spacer"></span>
           <span class="small">{{ doneCount() }} of {{ sessionCases().length }} recorded</span>
           @if (queue.pending()) {
@@ -139,13 +139,15 @@ const KEY = 'tcm.session';
               @if (queue.latestFor(tc.number); as job) {
                 @if (job.status === 'error') {
                   <div class="banner banner-bad small" role="alert">
-                    Couldn't save the {{ job.meta.result }} run: {{ job.message }}
+                    Couldn't save the {{ resultWord[job.meta.result] }} run: {{ job.message }}
                     <button class="btn btn-link small" type="button" (click)="queue.retry(job.id)">Retry</button>
                   </div>
                 } @else if (job.status === 'done') {
-                  <div class="banner banner-good small">Recorded: {{ job.meta.result }}. {{ job.message !== 'Saved' ? job.message : '' }}</div>
+                  <div [class]="'banner small ' + (job.meta.result === 'pass' ? 'banner-good' : job.meta.result === 'fail' ? 'banner-bad' : 'banner-warn')" role="status">
+                    Recorded as {{ resultWord[job.meta.result] }} on {{ names[job.meta.platform] }}. {{ job.message !== 'Saved' ? job.message : '' }}
+                  </div>
                 } @else {
-                  <div class="banner small">Saving the {{ job.meta.result }} run in the background… {{ job.message }}</div>
+                  <div class="banner small">Saving the {{ resultWord[job.meta.result] }} run in the background… {{ job.message }}</div>
                 }
               }
 
@@ -165,7 +167,7 @@ const KEY = 'tcm.session';
               } @else {
                 <label class="field small">
                   Notes
-                  <textarea rows="2" [value]="notes()" (input)="notes.set($any($event.target).value)" placeholder="Anything worth knowing (required for Fail and Blocked)"></textarea>
+                  <textarea #notesBox rows="2" [value]="notes()" (input)="notes.set($any($event.target).value)" placeholder="Anything worth knowing (required for Fail and Blocked)"></textarea>
                 </label>
                 <app-evidence-picker [(files)]="files" />
                 <div class="row actions">
@@ -184,7 +186,18 @@ const KEY = 'tcm.session';
             <article class="main stack">
               <h1 class="case-title">All done</h1>
               <p class="muted">Every case in this session has a result{{ queue.pending() ? '; uploads are still finishing' : '' }}.</p>
-              <div><button class="btn btn-primary" type="button" (click)="end()">End session</button></div>
+              <p class="summary">
+                @for (t of tally(); track t.result) {
+                  <span [class]="'badge res-' + t.result">{{ t.count }} {{ resultWord[t.result] }}</span>
+                }
+                @if (bugsFiled()) {
+                  <span class="badge badge-outline">{{ bugsFiled() }} bug{{ bugsFiled() === 1 ? '' : 's' }} filed</span>
+                }
+              </p>
+              <div class="row">
+                <button class="btn btn-primary" type="button" (click)="end()">End session</button>
+                <a class="btn" routerLink="../dashboard" queryParamsHandling="preserve">See the dashboard</a>
+              </div>
             </article>
           }
         </div>
@@ -222,6 +235,11 @@ const KEY = 'tcm.session';
     .res .kbd { color: #fff; border-color: rgb(255 255 255 / 0.6); }
     .mono { font-family: var(--mono); font-size: 12.5px; }
     .warn-text { color: var(--warn); }
+    .summary { display: flex; gap: 8px; flex-wrap: wrap; }
+    .summary .badge { font-size: 14px; padding: 4px 10px; }
+    .res-pass { background: var(--good-soft); color: var(--good); }
+    .res-fail { background: var(--bad-soft); color: var(--bad); }
+    .res-blocked { background: var(--warn-soft); color: var(--warn); }
   `,
 })
 export class SessionPage {
@@ -232,6 +250,9 @@ export class SessionPage {
   private readonly session = inject(Session);
 
   protected readonly names = PLATFORM_NAMES;
+  protected readonly resultWord: Record<RunResult, string> = { pass: 'passed', fail: 'failed', blocked: 'blocked' };
+  private readonly notesBox = viewChild<ElementRef<HTMLTextAreaElement>>('notesBox');
+  protected readonly bugsFiled = signal(0);
   protected readonly setup = signal<SessionSetup | null>(load());
   protected readonly includeOthers = signal(false);
   protected readonly index = signal(0);
@@ -289,6 +310,15 @@ export class SessionPage {
   });
   protected readonly current = computed(() => this.sessionCases()[this.index()] ?? null);
   protected readonly doneCount = computed(() => Object.keys(this.results()).length);
+  protected readonly tally = computed(() =>
+    (['pass', 'fail', 'blocked'] as RunResult[])
+      .map((result) => ({ result, count: Object.values(this.results()).filter((r) => r === result).length }))
+      .filter((t) => t.count > 0),
+  );
+  protected readonly deviceLine = computed(() => {
+    const s = this.setup();
+    return s ? [s.device, s.os, s.env].filter(Boolean).join(' · ') : '';
+  });
   protected readonly nextStep = computed(() => {
     const steps = this.current()?.steps ?? [];
     const i = steps.findIndex((_, j) => !this.ticked().has(j));
@@ -349,6 +379,7 @@ export class SessionPage {
     saveRunDefaults(s.platform, { appVersion: s.appVersion, build: s.build, device: s.device, os: s.os, env: s.env });
     sessionStorage.setItem(KEY, JSON.stringify(s));
     this.results.set({});
+    this.bugsFiled.set(0);
     this.index.set(0);
     this.setup.set(s);
   }
@@ -412,7 +443,8 @@ export class SessionPage {
     const s = this.setup();
     if (!tc || !s) return;
     if (result !== 'pass' && !this.notes().trim()) {
-      this.hint.set(`Add a note saying why it ${result === 'fail' ? 'failed' : 'is blocked'}, then press ${result === 'fail' ? 'F' : 'B'} again.`);
+      this.hint.set(`Add a note saying why it ${result === 'fail' ? 'failed' : 'is blocked'}, then press ${result === 'fail' ? 'Fail' : 'Blocked'} again.`);
+      this.notesBox()?.nativeElement.focus();
       return;
     }
     const meta: RunMeta = {
@@ -443,6 +475,7 @@ export class SessionPage {
     this.bugError.set(null);
     try {
       await this.store.fileBug(tc, this.setup()!.platform, this.bugTitleText().trim(), this.bugText());
+      this.bugsFiled.update((n) => n + 1);
       this.bugFor.set(null);
       this.advance();
     } catch (e) {

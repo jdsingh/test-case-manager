@@ -897,6 +897,30 @@ Scenario: Order history shows the new order
     check(await shows(page.getByText('skill is in this repo')), 'skill shown as installed');
     await page.reload();
     check(await shows(page.getByText('skill is in this repo')), 'a reload in sample mode comes back cleanly (fresh sample data)');
+    // Engineers and the tech lead (role pass).
+    const openCase = async (title: string) => {
+      await page.getByRole('link', { name: 'Test cases', exact: true }).first().click();
+      await page.getByText(title).first().click();
+    };
+    await openCase('Expired card shows an inline error');
+    check(await shows(page.getByText('Waiting for priya-pm to address the change request')), 'reviewer who asked for changes waits on the author');
+    check((await page.getByRole('link', { name: 'Edit and resubmit' }).count()) === 0, 'reviewer isn\'t told to edit and resubmit');
+    await page.getByLabel('Viewing as').selectOption('sam-android');
+    await page.waitForURL(/\/inbox/);
+    await openCase('Promo code updates the order total');
+    check(await shows(page.getByText(/suggested rewording \(step 3\) hasn't been applied/)), 'approve warns about an unapplied suggestion');
+    await page.getByRole('button', { name: /^Approve/ }).click();
+    check(await shows(page.getByText(/Approved\. .+ assigned to run it\./)), 'approval says who runs it');
+    check(await shows(page.locator('.result button.btn-primary', { hasText: 'Record Android run' })), 'own platform\'s run button is primary');
+    check((await page.locator('.result button.btn-primary', { hasText: 'Record iOS run' }).count()) === 0, 'other platform\'s run button is secondary');
+    await page.getByLabel('Viewing as').selectOption('alex-lead');
+    await page.waitForURL(/\/dashboard/);
+    const blockersCard = page.locator('section', { has: page.getByRole('heading', { name: /Blocking release/ }) });
+    check(await shows(blockersCard.getByText('#6 Pay with Apple Pay')), 'dashboard names the blocking cases');
+    check(await shows(blockersCard.getByText('jo-ios').first()), 'blocking cases show who has them');
+    await page.getByRole('link', { name: /^Inbox/ }).click();
+    check(await shows(page.getByText("Tech leads aren't usually assigned cases")), 'tech lead\'s empty inbox points to the dashboard');
+
     await page.getByRole('button', { name: 'Exit sample data' }).click();
     await page.waitForURL(/\/connect/);
     check(toGitHub.length === 0, `sample data made no requests to GitHub (${toGitHub.length})`);

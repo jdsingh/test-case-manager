@@ -67,8 +67,8 @@ export class EvidenceCache {
     .thumb img { width: 100%; height: 100%; object-fit: cover; }
     .video-btn { width: auto; min-width: 96px; padding: 0 10px; gap: 6px; }
     .video { max-width: 320px; max-height: 240px; border-radius: 6px; background: #000; }
-    .lightbox { width: auto; max-width: 92vw; padding: 12px; }
-    .lightbox img { max-width: 88vw; max-height: 80vh; display: block; margin-bottom: 8px; }
+    .lightbox { width: fit-content; max-width: 92vw; padding: 12px; }
+    .lightbox img { max-width: 88vw; max-height: 80vh; display: block; margin: 0 auto 8px; }
   `,
 })
 /** Object URLs are cached app-wide and reused, so they aren't revoked per thumbnail. */

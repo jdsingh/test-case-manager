@@ -83,9 +83,6 @@ interface ActivityItem {
               @case ('fix') {
                 <a class="btn btn-primary" routerLink="edit" queryParamsHandling="preserve">Edit and resubmit</a>
               }
-              @case ('review') {
-                <button class="btn btn-primary" type="button" (click)="scrollToReview()">Review this case</button>
-              }
               @case ('run') {
                 <button class="btn btn-primary" type="button" (click)="runs()?.openFor(next()!.platform!)">
                   {{ next()!.label }}
@@ -162,6 +159,14 @@ interface ActivityItem {
           }
         }
 
+        @if (waitingOnFix(); as who) {
+          <div class="waiting row wrap" role="status">
+            <span>⏳ Waiting for <strong>{{ who }}</strong> to address the change request</span>
+            @if (ws.canWriteRepo()) {
+              <button class="btn btn-link small" type="button" (click)="remind(tc)" [disabled]="busy()">Remind</button>
+            }
+          </div>
+        }
         @if (changeRequest(); as cr) {
           <div class="banner banner-bad" role="status">
             <div>
@@ -170,7 +175,9 @@ interface ActivityItem {
               @if (cr.rest) {
                 <p class="cr">{{ cr.rest }}</p>
               }
-              <p class="small muted">Edit the case to address this, then resubmit it for review.</p>
+              @if (next()?.kind === 'fix') {
+                <p class="small muted">Edit the case to address this, then resubmit it for review.</p>
+              }
             </div>
           </div>
         }
@@ -189,7 +196,7 @@ interface ActivityItem {
           </section>
         }
         @if (tc.steps.length) {
-          <app-step-notes [tc]="tc" [notes]="history().lineNotes" [canAccept]="canAccept()" (changed)="reload()" />
+          <app-step-notes [tc]="tc" [notes]="openLineNotes()" [canAccept]="canAccept()" (changed)="reload()" />
         }
         @if (notesText()) {
           <section class="stack" style="gap: 4px">
@@ -389,7 +396,11 @@ export class CaseDetailPage {
     if (!tc || !this.ws.canWriteRepo()) return null;
     if (tc.closed) return { kind: 'reopen' };
     if (tc.status === 'draft' || tc.status === null) return { kind: 'submit' };
-    if (tc.status === 'changes-requested') return { kind: 'fix', hint: 'Address the request below, then resubmit.' };
+    if (tc.status === 'changes-requested') {
+      // The author (or whoever it's assigned to) fixes it; the reviewer who asked just waits.
+      const owner = tc.assignees.some((a) => sameLogin(a.login, me)) || (!!tc.author && sameLogin(tc.author, me)) || this.ws.roles().includes('pm');
+      return owner ? { kind: 'fix', hint: 'Address the request below, then resubmit.' } : null;
+    }
     if (tc.status === 'in-review') {
       const check = canReview(tc, this.history(), config, me);
       return check.ok ? { kind: 'review' } : null;
@@ -475,6 +486,19 @@ export class CaseDetailPage {
       })
       .reverse(),
   );
+
+  /** Who a change request is waiting on, when it isn't the viewer. */
+  protected readonly waitingOnFix = computed(() => {
+    const tc = this.tc();
+    if (!tc || tc.closed || tc.status !== 'changes-requested' || this.next()?.kind === 'fix') return null;
+    return this.assigneeNames(tc) || tc.author || 'the author';
+  });
+
+  /** Step comments matter while the wording is being agreed; after approval they're history (in Activity). */
+  protected readonly openLineNotes = computed(() => {
+    const s = this.tc()?.status ?? 'draft';
+    return ['draft', 'in-review', 'changes-requested'].includes(s) ? this.history().lineNotes : [];
+  });
 
   /** The latest change request, shown prominently while the case waits on the author. */
   protected readonly changeRequest = computed(() => {
@@ -575,13 +599,14 @@ export class CaseDetailPage {
     if (await this.act(async () => (who = await this.store.remind(tc)))) this.toasts.show(`Reminded ${who.join(', ')}.`);
   }
 
-  protected scrollToReview(): void {
-    document.getElementById('review-panel')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    setTimeout(() => document.querySelector<HTMLTextAreaElement>('#review-panel textarea')?.focus(), 300);
-  }
-
   protected onReviewed(decision: 'approve' | 'request_changes'): void {
-    this.toasts.show(decision === 'approve' ? 'Approved. The runners have been assigned.' : 'Changes requested. Sent back to the author.');
+    const logins = this.tc()?.assignees.map((a) => a.login) ?? [];
+    const who = logins.length > 1 ? `${logins.slice(0, -1).join(', ')} and ${logins.at(-1)}` : (logins[0] ?? '');
+    this.toasts.show(
+      decision === 'approve'
+        ? who ? `Approved. ${who} ${logins.length > 1 ? 'are' : 'is'} assigned to run it.` : 'Approved. Nobody is set up to run it yet; add engineers in Team settings.'
+        : `Changes requested. Sent back to ${who || 'the author'}.`,
+    );
     this.reload();
   }
 
@@ -653,5 +678,8 @@ export class CaseDetailPage {
 
 /** Plain text for display: drop bold markers and leading emoji markers' asterisks. */
 function stripMd(s: string): string {
-  return s.replace(/\*\*(.+?)\*\*/g, '$1').trim();
+  return s
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/(\d+)/g, '$1#$2')
+    .trim();
 }
