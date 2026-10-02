@@ -9,13 +9,15 @@ import { Toasts } from '../../core/toast';
 import { copyInfo, isOutOfDate } from '../../core/testcase/bank';
 import { FeatureSelection } from '../../core/feature-selection';
 import { CasesStore } from '../../core/testcase/cases-store';
-import { PRIORITIES, Platform, Priority } from '../../core/config/team-config';
+import { PRIORITIES, Platform, Priority, includesLogin, sameLogin } from '../../core/config/team-config';
+import { Session } from '../../core/session';
 import { STATUSES, STATUS_LABELS, Status, TestCase } from '../../core/testcase/model';
 import { timeAgo } from '../../core/time';
 import { casesToCsv, download } from '../../core/import/export';
 import { Avatars, PlatformBadges, PriorityBadge, StatusBadge } from './badges';
 
 interface Filters {
+  mine: boolean;
   q: string;
   priorities: Priority[];
   status: Status | '';
@@ -66,6 +68,28 @@ interface Filters {
           </p>
         </section>
       } @else {
+        @if (turn().total) {
+          <div class="turn row wrap" role="region" aria-label="Your turn">
+            <strong>Your turn:</strong>
+            @if (turn().changes) {
+              <a class="chip" routerLink="." [queryParams]="{ status: 'changes-requested', mine: 1 }" queryParamsHandling="merge">
+                {{ turn().changes }} change request{{ turn().changes === 1 ? '' : 's' }} to address
+              </a>
+            }
+            @if (turn().drafts) {
+              <a class="chip" routerLink="." [queryParams]="{ status: 'draft', mine: 1 }" queryParamsHandling="merge">
+                {{ turn().drafts }} draft{{ turn().drafts === 1 ? '' : 's' }} to submit
+              </a>
+            }
+            @if (turn().review) {
+              <a class="chip" routerLink="../review" queryParamsHandling="preserve">{{ turn().review }} to review</a>
+            }
+            @if (turn().run) {
+              <a class="chip" routerLink="../session" queryParamsHandling="preserve">{{ turn().run }} to run</a>
+            }
+          </div>
+        }
+
         <div class="filters">
           <input
             #search
@@ -103,6 +127,10 @@ interface Filters {
             Regression
           </label>
           <label class="row small">
+            <input type="checkbox" [checked]="filters().mine" (change)="set({ mine: $any($event.target).checked })" />
+            Assigned to me
+          </label>
+          <label class="row small">
             <input type="checkbox" [checked]="filters().closed" (change)="set({ closed: $any($event.target).checked })" />
             Show closed
           </label>
@@ -127,9 +155,9 @@ interface Filters {
                 </button>
               }
             </div>
-              @if (canBulk() && anyRunnable()) {
+              @if (canBulk() && anySelectable()) {
                 <button class="btn btn-link small" type="button" (click)="toggleSelecting()">
-                  {{ selecting() ? 'Done selecting' : 'Select to assign runners' }}
+                  {{ selecting() ? 'Done selecting' : 'Select' }}
                 </button>
               }
             </div>
@@ -156,7 +184,14 @@ interface Filters {
               @if (selected().size) {
                 <div class="bulk card row" role="region" aria-label="Bulk actions">
                   <strong>{{ selected().size }} selected</strong>
-                  <span class="muted small">Assign runners:</span>
+                  @if (selectedDrafts().length) {
+                    <button class="btn btn-primary" type="button" (click)="submitSelected()" [disabled]="bulkBusy()">
+                      @if (bulkBusy()) { <span class="spinner" aria-hidden="true"></span> }
+                      Submit {{ selectedDrafts().length }} draft{{ selectedDrafts().length === 1 ? '' : 's' }} for review
+                    </button>
+                  }
+                  @if (selectedRunnable().length) {
+                  <span class="muted small">Assign runners{{ selectedDrafts().length ? ' (' + selectedRunnable().length + ' approved)' : '' }}:</span>
                   @for (p of bulkPlatforms; track p.id) {
                     <label class="row small">
                       {{ p.name }}
@@ -168,9 +203,10 @@ interface Filters {
                       </select>
                     </label>
                   }
-                  <button class="btn btn-primary" type="button" (click)="applyBulk()" [disabled]="bulkBusy() || !hasBulkPick()">
-                    @if (bulkBusy()) { <span class="spinner" aria-hidden="true"></span> {{ bulkDone() }}/{{ selected().size }} } @else { Apply }
+                  <button class="btn" type="button" (click)="applyBulk()" [disabled]="bulkBusy() || !hasBulkPick()">
+                    @if (bulkBusy()) { <span class="spinner" aria-hidden="true"></span> {{ bulkDone() }}/{{ selectedRunnable().length }} } @else { Apply }
                   </button>
+                  }
                   <button class="btn btn-link small" type="button" (click)="clearSelection()">Clear</button>
                 </div>
               }
@@ -182,7 +218,7 @@ interface Filters {
                   <tr>
                     @if (selecting()) {
                       <th scope="col" class="sel">
-                        <input type="checkbox" aria-label="Select all runnable cases" [checked]="allSelected()" (change)="toggleAll()" />
+                        <input type="checkbox" aria-label="Select all" [checked]="allSelected()" (change)="toggleAll()" />
                       </th>
                     }
                     <th scope="col" class="num">#</th>
@@ -199,10 +235,10 @@ interface Filters {
                     <tr class="click" (click)="openRow($event, tc.number)">
                       @if (selecting()) {
                         <td class="sel">
-                          @if (runnable(tc)) {
+                          @if (selectable(tc)) {
                             <input type="checkbox" [attr.aria-label]="'Select #' + tc.number" [checked]="selected().has(tc.number)" (change)="toggleSelect(tc.number)" />
                           } @else {
-                            <span class="muted small" title="Only approved cases have runners">–</span>
+                            <span class="muted small" title="Only drafts (to submit) and approved cases (to assign runners) can be selected">–</span>
                           }
                         </td>
                       }
@@ -211,6 +247,9 @@ interface Filters {
                         <a class="title" [routerLink]="[tc.number]" queryParamsHandling="preserve">{{ tc.title }}</a>
                         @if (tc.regression) {
                           <span class="badge badge-outline small">regression</span>
+                        }
+                        @if (myTurn().has(tc.number)) {
+                          <span class="badge your-turn small">your turn</span>
                         }
                         @if (outdated().has(tc.number)) {
                           <span class="badge status-in-review small" title="The bank original changed after this copy was made">out of date</span>
@@ -243,6 +282,10 @@ interface Filters {
     .seg button { border: none; background: var(--surface); color: var(--text-2); font: inherit; font-weight: 600; padding: 0 10px; height: 34px; cursor: pointer; }
     .seg button + button { border-left: 1px solid var(--border); }
     .seg button.on { background: var(--accent-soft); color: var(--accent); }
+    .turn { gap: 8px; padding: 10px 14px; border-radius: var(--radius); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); font-size: 13.5px; }
+    .chip { padding: 3px 10px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); color: var(--text); text-decoration: none; font-weight: 500; }
+    .chip:hover { border-color: var(--accent); color: var(--accent); }
+    .your-turn { background: var(--accent); color: var(--accent-text); margin-left: 4px; }
     .counts-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
     .counts { display: flex; flex-wrap: wrap; gap: 6px; }
     tr.click { cursor: pointer; }
@@ -299,6 +342,7 @@ export class CasesListPage {
           status: ((STATUSES as readonly string[]).includes(q.get('status') ?? '') ? q.get('status') : '') as Status | '',
           platform: (['android', 'ios'].includes(q.get('platform') ?? '') ? q.get('platform') : '') as Platform | '',
           regression: q.get('regression') === '1',
+          mine: q.get('mine') === '1',
           closed: q.get('closed') === '1',
         }),
       ),
@@ -316,6 +360,7 @@ export class CasesListPage {
       .filter((c) => !f.priorities.length || (c.priority && f.priorities.includes(c.priority)))
       .filter((c) => !f.platform || c.platforms.includes(f.platform))
       .filter((c) => !f.regression || c.regression)
+      .filter((c) => !f.mine || c.assignees.some((a) => sameLogin(a.login, this.me())))
       .filter((c) => !q || matches(c, q))
       .sort((a, b) => Number(a.closed) - Number(b.closed) || (a.priority ?? 'P9').localeCompare(b.priority ?? 'P9') || a.number - b.number);
   });
@@ -343,7 +388,6 @@ export class CasesListPage {
   ];
   protected readonly canBulk = computed(() => this.ws.canWriteRepo() && !this.ws.isViewerOnly());
   protected readonly selecting = signal(false);
-  protected readonly anyRunnable = computed(() => this.shown().some(canRun));
 
   protected toggleSelecting(): void {
     this.selecting.update((v) => !v);
@@ -356,9 +400,16 @@ export class CasesListPage {
     if (window.getSelection()?.toString()) return; // selecting text, not opening
     void this.router.navigate([n], { relativeTo: this.route, queryParamsHandling: 'preserve' });
   }
-  protected readonly runnable = (tc: TestCase) => canRun(tc);
+  /** Drafts can be submitted in bulk; approved cases can get runners in bulk. */
+  protected readonly selectable = (tc: TestCase) => canRun(tc) || isDraft(tc);
+  private readonly selectedCases = computed(() =>
+    [...this.selected()].map((n) => this.store.byNumber(n)).filter((c): c is TestCase => !!c),
+  );
+  protected readonly selectedDrafts = computed(() => this.selectedCases().filter(isDraft));
+  protected readonly selectedRunnable = computed(() => this.selectedCases().filter(canRun));
+  protected readonly anySelectable = computed(() => this.shown().some((c) => this.selectable(c)));
   protected readonly allSelected = computed(() => {
-    const r = this.shown().filter(canRun);
+    const r = this.shown().filter((c) => this.selectable(c));
     return r.length > 0 && r.every((c) => this.selected().has(c.number));
   });
   protected readonly hasBulkPick = computed(() => Object.values(this.bulkPick()).some(Boolean));
@@ -380,15 +431,30 @@ export class CasesListPage {
   }
 
   protected toggleAll(): void {
-    this.selected.set(this.allSelected() ? new Set() : new Set(this.shown().filter(canRun).map((c) => c.number)));
+    this.selected.set(this.allSelected() ? new Set() : new Set(this.shown().filter((c) => this.selectable(c)).map((c) => c.number)));
   }
 
   protected setBulk(p: Platform, login: string): void {
     this.bulkPick.update((b) => ({ ...b, [p]: login || undefined }));
   }
 
+  protected async submitSelected(): Promise<void> {
+    const drafts = this.selectedDrafts();
+    this.bulkBusy.set(true);
+    this.bulkError.set(null);
+    const res = await this.store.submitMany(drafts, (d) => this.bulkDone.set(d));
+    this.bulkBusy.set(false);
+    if (res.submitted) this.toasts.show(`Submitted ${res.submitted} draft${res.submitted === 1 ? '' : 's'} for review.`);
+    if (res.error) this.bulkError.set(`Stopped after ${res.submitted}: ${res.error.message}`);
+    else if (res.skipped.length) {
+      this.bulkError.set(`${res.skipped.map((c) => '#' + c.number).join(', ')} not submitted: nobody on the team can review that platform yet.`);
+    }
+    this.selected.update((s) => new Set([...s].filter((n) => !drafts.some((d) => d.number === n) || res.skipped.some((k) => k.number === n))));
+    if (!this.selected().size) this.selecting.set(false);
+  }
+
   protected async applyBulk(): Promise<void> {
-    const cases = [...this.selected()].map((n) => this.store.byNumber(n)).filter((c): c is TestCase => !!c);
+    const cases = this.selectedRunnable();
     this.bulkBusy.set(true);
     this.bulkDone.set(0);
     this.bulkError.set(null);
@@ -405,6 +471,32 @@ export class CasesListPage {
   }
 
   private readonly bank = inject(BankStore);
+  private readonly session = inject(Session);
+  private readonly me = computed(() => this.session.viewer()?.login ?? '');
+
+  /** What in this feature is waiting on the signed-in user (UX 5). */
+  private readonly myCases = computed(() => {
+    const config = this.ws.config();
+    const me = this.me();
+    const mine = (c: TestCase) => !c.closed && c.assignees.some((a) => sameLogin(a.login, me));
+    const onPlatform = (c: TestCase) => !!config && c.platforms.some((p) => includesLogin(config.team[p], me) && !c.labels.includes(`run:${p}:passed`));
+    const cases = this.store.cases().filter(mine);
+    return {
+      changes: cases.filter((c) => c.status === 'changes-requested'),
+      drafts: cases.filter((c) => c.status === 'draft' || c.status === null),
+      review: cases.filter((c) => c.status === 'in-review' && !!config && c.platforms.some((p) => includesLogin(config.team[p], me))),
+      run: cases.filter((c) => canRun(c) && onPlatform(c)),
+    };
+  });
+  protected readonly turn = computed(() => {
+    const m = this.myCases();
+    const counts = { changes: m.changes.length, drafts: m.drafts.length, review: m.review.length, run: m.run.length };
+    return { ...counts, total: counts.changes + counts.drafts + counts.review + counts.run };
+  });
+  protected readonly myTurn = computed(() => {
+    const m = this.myCases();
+    return new Set([...m.changes, ...m.drafts, ...m.review, ...m.run].map((c) => c.number));
+  });
   private readonly toasts = inject(Toasts);
   /** Copies whose bank original has changed since (RB-5). */
   protected readonly outdated = computed(() => {
@@ -451,6 +543,7 @@ export class CasesListPage {
         status: f.status || null,
         platform: f.platform || null,
         regression: f.regression ? '1' : null,
+        mine: f.mine ? '1' : null,
         closed: f.closed ? '1' : null,
       },
     });
@@ -472,8 +565,12 @@ export class CasesListPage {
   }
 
   protected clear(): void {
-    this.set({ q: '', priorities: [], status: '', platform: '', regression: false, closed: false });
+    this.set({ q: '', priorities: [], status: '', platform: '', regression: false, closed: false, mine: false });
   }
+}
+
+function isDraft(c: TestCase): boolean {
+  return !c.closed && (c.status === 'draft' || c.status === null);
 }
 
 function matches(c: TestCase, q: string): boolean {

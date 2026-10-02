@@ -210,19 +210,29 @@ type Source = 'sheet' | 'gherkin';
             } @else if (running()) {
               Created {{ progressDone() }} of {{ progressTotal() }}…
             } @else {
-              Created {{ done() }} test case{{ done() === 1 ? '' : 's' }} as drafts.
-              <a routerLink=".." [queryParams]="{ status: 'draft' }" queryParamsHandling="merge">See the drafts</a>
+              @if (submittedAfter()) {
+                Created {{ done() }} test case{{ done() === 1 ? '' : 's' }} and sent them for review.
+                <a routerLink=".." [queryParams]="{ status: 'in-review' }" queryParamsHandling="merge">See them</a>
+              } @else {
+                Created {{ done() }} test case{{ done() === 1 ? '' : 's' }} as drafts.
+                <a routerLink=".." [queryParams]="{ status: 'draft' }" queryParamsHandling="merge">See the drafts</a>
+              }
             }
           </span>
         </div>
       }
+
+      <label class="row small submit-opt">
+        <input type="checkbox" [checked]="submitAfter()" (change)="submitAfter.set(!submitAfter())" [disabled]="running()" />
+        Submit them for review straight away (each goes to its suggested reviewer)
+      </label>
 
       <div class="row footer">
         @if (running()) {
           <button class="btn" type="button" (click)="cancel.set(true)" [disabled]="cancel()">Stop after this one</button>
         } @else {
           <button class="btn btn-primary" type="button" (click)="run()" [disabled]="!selected().length || !features.project()">
-            Import {{ selected().length }} as draft{{ selected().length === 1 ? '' : 's' }}
+            Import {{ selected().length }}{{ submitAfter() ? ' and submit' : (selected().length === 1 ? ' as draft' : ' as drafts') }}
           </button>
         }
         <span class="spacer"></span>
@@ -255,6 +265,7 @@ type Source = 'sheet' | 'gherkin';
     .bar { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
     .fill { height: 100%; background: var(--accent); transition: width 0.3s; }
     .footer { padding-top: 12px; border-top: 1px solid var(--border); }
+    .submit-opt { margin-top: 4px; }
   `,
 })
 export class ImportPage {
@@ -285,6 +296,8 @@ export class ImportPage {
   protected readonly progressTotal = signal(0);
   protected readonly done = signal<number | null>(null);
   protected readonly error = signal<string | null>(null);
+  protected readonly submitAfter = signal(false);
+  protected readonly submittedAfter = signal(false);
 
   private readonly table = computed(() => (this.source() === 'sheet' ? parseDelimited(this.text()) : []));
   protected readonly headers = computed(() => this.table()[0] ?? []);
@@ -369,6 +382,7 @@ export class ImportPage {
     const drafts = this.selected().map((r) => r.draft);
     if (!drafts.length) return;
     this.running.set(true);
+    this.submittedAfter.set(false);
     this.cancel.set(false);
     this.error.set(null);
     this.done.set(null);
@@ -381,7 +395,10 @@ export class ImportPage {
         this.waiting.set(p.waiting);
       },
       () => this.cancel(),
+      1000,
+      { submit: this.submitAfter() },
     );
+    this.submittedAfter.set(this.submitAfter());
     this.running.set(false);
     this.waiting.set(false);
     this.done.set(result.created.length);

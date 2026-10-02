@@ -142,9 +142,24 @@ interface ActivityItem {
         }
 
         @if (tc.status === 'in-review') {
-          <div id="review-panel">
-            <app-review-panel [tc]="tc" [history]="history()" [showReason]="true" (decided)="onReviewed($event)" />
-          </div>
+          @if (reviewCheck()?.ok) {
+            <div id="review-panel">
+              <app-review-panel [tc]="tc" [history]="history()" (decided)="onReviewed($event)" />
+            </div>
+          } @else {
+            <div class="waiting row wrap" role="status">
+              <span>
+                ⏳ Waiting for <strong>{{ assigneeNames(tc) || 'a reviewer' }}</strong> to review
+                @if (submittedAt(); as at) { <span class="muted">· submitted {{ ago(at) }}</span> }
+              </span>
+              @if (ws.canWriteRepo() && tc.assignees.length) {
+                <button class="btn btn-link small" type="button" (click)="remind(tc)" [disabled]="busy()">Remind</button>
+              }
+              @if (ownEditReason(); as why) {
+                <span class="muted small">{{ why }}</span>
+              }
+            </div>
+          }
         }
 
         @if (changeRequest(); as cr) {
@@ -315,6 +330,7 @@ interface ActivityItem {
     .sep { margin: 0 2px; }
     .actions { padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
     .menu { position: relative; }
+    .waiting { gap: 10px; padding: 10px 14px; border-radius: var(--radius); background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); }
     .menu > summary { list-style: none; }
     .menu > summary::-webkit-details-marker { display: none; }
     .menu-list { position: absolute; z-index: 6; top: 40px; left: 0; min-width: 230px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); display: flex; flex-direction: column; }
@@ -539,6 +555,24 @@ export class CaseDetailPage {
     document.querySelectorAll<HTMLDetailsElement>('details.menu[open]').forEach((d) => {
       if (!d.contains(e.target as Node)) d.open = false;
     });
+  }
+
+  protected readonly reviewCheck = computed(() => {
+    const tc = this.tc();
+    return tc ? canReview(tc, this.history(), this.ws.config(), this.session.viewer()?.login ?? '') : null;
+  });
+  /** AU-9 is worth saying; "you're not an engineer" isn't, for a PM it's just how it works. */
+  protected readonly ownEditReason = computed(() => {
+    const c = this.reviewCheck();
+    return c && !c.ok && c.reason.startsWith('You edited') ? c.reason : null;
+  });
+  protected readonly submittedAt = computed(
+    () => [...this.comments()].reverse().find((c) => parseMarker(c.body)?.kind === 'submit')?.createdAt ?? null,
+  );
+
+  protected async remind(tc: TestCase): Promise<void> {
+    let who: string[] = [];
+    if (await this.act(async () => (who = await this.store.remind(tc)))) this.toasts.show(`Reminded ${who.join(', ')}.`);
   }
 
   protected scrollToReview(): void {

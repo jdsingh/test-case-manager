@@ -1,4 +1,5 @@
 import {
+  ChangeDetectorRef,
   Component,
   ElementRef,
   HostListener,
@@ -28,6 +29,7 @@ import {
   isScenarioChange,
 } from '../../core/testcase/model';
 import { buildStepLibrary, findSimilar } from '../../core/testcase/library';
+import { writingHints } from '../../core/testcase/hints';
 import { GherkinView } from './badges';
 import { Toasts } from '../../core/toast';
 import { CommentNode } from '../../core/github/api';
@@ -141,16 +143,40 @@ const KEYWORDS: Keyword[] = ['Given', 'When', 'Then', 'And'];
                           <option [value]="k" [selected]="k === s.keyword">{{ k }}</option>
                         }
                       </select>
-                      <input
-                        #stepInput
-                        type="text"
-                        autocomplete="off"
-                        [attr.list]="'lib-' + (sections()[i] ?? 'Given')"
-                        [attr.aria-label]="'Step ' + (i + 1) + ' text'"
-                        [value]="s.text"
-                        (input)="setText(i, $any($event.target).value)"
-                        (keydown)="stepKey($event, i)"
-                      />
+                      <div class="field-wrap">
+                        <input
+                          #stepInput
+                          type="text"
+                          autocomplete="off"
+                          role="combobox"
+                          aria-autocomplete="list"
+                          [attr.aria-expanded]="activeStep() === i && suggestions().length > 0"
+                          [attr.aria-controls]="'sugg-' + i"
+                          [attr.aria-activedescendant]="activeStep() === i && suggestIndex() >= 0 ? 'sugg-' + i + '-' + suggestIndex() : null"
+                          [attr.aria-label]="'Step ' + (i + 1) + ' text'"
+                          [value]="s.text"
+                          (focus)="activeStep.set(i); suggestIndex.set(-1)"
+                          (blur)="onStepBlur(i)"
+                          (input)="setText(i, $any($event.target).value)"
+                          (keydown)="stepKey($event, i)"
+                        />
+                        @if (activeStep() === i && suggestions().length) {
+                          <ul class="sugg-list" role="listbox" [id]="'sugg-' + i" [attr.aria-label]="'Steps used before'">
+                            @for (m of suggestions(); track m.text; let j = $index) {
+                              <li
+                                role="option"
+                                [id]="'sugg-' + i + '-' + j"
+                                [attr.aria-selected]="j === suggestIndex()"
+                                [class.on]="j === suggestIndex()"
+                                (mousedown)="$event.preventDefault(); acceptSuggestion(i, m.text)"
+                              >
+                                <span>{{ m.text }}</span>
+                                <span class="muted small">used in {{ m.count }}</span>
+                              </li>
+                            }
+                          </ul>
+                        }
+                      </div>
                       <div class="step-actions">
                         <button type="button" class="icon" [disabled]="i === 0" (click)="move(i, -1)" [attr.aria-label]="'Move step ' + (i + 1) + ' up'">↑</button>
                         <button type="button" class="icon" [disabled]="i === draft().steps.length - 1" (click)="move(i, 1)" [attr.aria-label]="'Move step ' + (i + 1) + ' down'">↓</button>
@@ -177,6 +203,19 @@ const KEYWORDS: Keyword[] = ['Given', 'When', 'Then', 'And'];
                     <li>{{ p }}</li>
                   }
                 </ul>
+              </div>
+            }
+
+            @if (hints().length) {
+              <div class="banner tips" role="note" aria-label="Writing tips">
+                <div>
+                  <strong class="small">Tips so reviewers can approve it first time</strong>
+                  <ul class="small">
+                    @for (h of hints(); track h.text + h.step) {
+                      <li>@if (h.step !== null) {<strong>Step {{ h.step + 1 }}:</strong>&nbsp;}{{ h.text }}</li>
+                    }
+                  </ul>
+                </div>
               </div>
             }
 
@@ -268,13 +307,6 @@ const KEYWORDS: Keyword[] = ['Given', 'When', 'Then', 'And'];
           </aside>
         </div>
 
-        @for (sec of sectionNames; track sec) {
-          <datalist [id]="'lib-' + sec">
-            @for (s of library()[sec]; track s.text) {
-              <option [value]="s.text"></option>
-            }
-          </datalist>
-        }
       } @else if (!error()) {
         <div class="row muted"><span class="spinner" aria-hidden="true"></span> Loading…</div>
       }
@@ -285,6 +317,7 @@ const KEYWORDS: Keyword[] = ['Given', 'When', 'Then', 'And'];
     .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 28px; align-items: start; }
     @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
     .preview { position: sticky; top: 72px; }
+    .tips { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
     .ask { padding: 12px; border-radius: var(--radius); background: var(--bad-soft); border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent); gap: 6px; }
     .ask .note { padding-top: 6px; border-top: 1px solid color-mix(in srgb, var(--bad) 20%, transparent); }
     .sugg { font-style: italic; margin: 2px 0; }
@@ -302,6 +335,10 @@ const KEYWORDS: Keyword[] = ['Given', 'When', 'Then', 'And'];
     .step.and { padding-left: 24px; grid-template-columns: 72px 1fr auto; }
     .step select { font-weight: 600; }
     .step-actions { display: flex; }
+    .field-wrap { position: relative; }
+    .sugg-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 4px; list-style: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .sugg-list li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+    .sugg-list li.on, .sugg-list li:hover { background: var(--accent-soft); }
     .icon { border: none; background: none; color: var(--text-2); width: 26px; height: 30px; border-radius: 6px; cursor: pointer; font-size: 15px; }
     .icon:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
     .icon:disabled { opacity: 0.3; cursor: default; }
@@ -316,6 +353,7 @@ export class CaseEditorPage {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly injector = inject(Injector);
+  private readonly cdr = inject(ChangeDetectorRef);
   private readonly toasts = inject(Toasts);
   private readonly stepInputs = viewChildren<ElementRef<HTMLInputElement>>('stepInput');
 
@@ -348,6 +386,7 @@ export class CaseEditorPage {
     return p;
   });
   protected readonly library = computed(() => buildStepLibrary(this.store.cases()));
+  protected readonly hints = computed(() => writingHints(this.draft()));
   protected readonly similar = computed(() => findSimilar(this.draft(), this.store.cases(), this.editing()?.number));
   protected readonly dirty = computed(() => describeEdit(this.original(), this.draft()).length > 0);
   protected readonly platformText = computed(
@@ -449,6 +488,8 @@ export class CaseEditorPage {
   }
 
   protected setText(i: number, text: string): void {
+    this.suggestIndex.set(-1);
+    this.suggestionsClosedSig.set(false);
     this.updateSteps((s) => s.map((x, j) => (j === i ? { ...x, text } : x)));
   }
 
@@ -468,9 +509,57 @@ export class CaseEditorPage {
     this.updateSteps((s) => s.filter((_, j) => j !== i));
   }
 
-  /** Enter adds an And below; Backspace in an empty step removes it. */
+  /** The step being typed in, for its suggestions (SL-1). */
+  protected readonly activeStep = signal<number | null>(null);
+  protected readonly suggestIndex = signal(-1);
+
+  /** Steps already used in this section that match what's typed, most used first. */
+  protected readonly suggestions = computed(() => {
+    const i = this.activeStep();
+    if (i === null || this.suggestionsClosedSig()) return [];
+    const typed = (this.draft().steps[i]?.text ?? '').trim().toLowerCase();
+    if (typed.length < 2) return [];
+    const words = typed.split(/\s+/);
+    const pool = this.library()[this.sections()[i] ?? 'Given'];
+    return pool
+      .filter((s) => s.text.toLowerCase() !== typed && words.every((w) => s.text.toLowerCase().includes(w)))
+      .slice(0, 6);
+  });
+  private readonly suggestionsClosedSig = signal(false);
+
+  protected acceptSuggestion(i: number, text: string): void {
+    this.setText(i, text);
+    const el = this.stepInputs()[i]?.nativeElement;
+    if (el) el.value = text;
+    this.suggestionsClosedSig.set(true);
+  }
+
+  protected onStepBlur(i: number): void {
+    setTimeout(() => {
+      if (this.activeStep() === i) this.activeStep.set(null);
+    }, 120);
+  }
+
+  /** Enter adds an And below; Backspace in an empty step removes it; arrows pick a suggestion. */
   protected stepKey(e: KeyboardEvent, i: number): void {
     const input = e.target as HTMLInputElement;
+    const sugg = this.suggestions();
+    if (sugg.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      const n = sugg.length;
+      this.suggestIndex.set(e.key === 'ArrowDown' ? (this.suggestIndex() + 1) % n : (this.suggestIndex() - 1 + n) % n);
+      return;
+    }
+    if (e.key === 'Escape' && sugg.length) {
+      e.preventDefault();
+      this.suggestionsClosedSig.set(true);
+      return;
+    }
+    if (e.key === 'Enter' && sugg.length && this.suggestIndex() >= 0) {
+      e.preventDefault();
+      this.acceptSuggestion(i, sugg[this.suggestIndex()].text);
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       this.insertAt(i + 1, 'And');
@@ -533,8 +622,15 @@ export class CaseEditorPage {
     this.focusStep(i);
   }
 
+  /**
+   * Renders the new row right away and focuses it in the same keystroke, so text typed
+   * straight after Enter lands in the new step, not the old one.
+   */
   private focusStep(i: number): void {
-    afterNextRender(() => this.stepInputs()[i]?.nativeElement.focus(), { injector: this.injector });
+    this.cdr.detectChanges();
+    const el = this.stepInputs()[i]?.nativeElement;
+    if (el) el.focus();
+    else afterNextRender(() => this.stepInputs()[i]?.nativeElement.focus(), { injector: this.injector });
   }
 
   private updateSteps(fn: (s: Step[]) => Step[]): void {

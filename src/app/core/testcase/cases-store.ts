@@ -31,7 +31,7 @@ import {
   labelsFor,
   renderBody,
 } from './model';
-import { closeComment, editComment, lineComment, reviewComment, submitComment } from './comments';
+import { closeComment, editComment, lineComment, remindComment, reviewComment, submitComment } from './comments';
 import { Decision, LineNote, historyOf } from './review';
 import { BugLink, RunEvent, RunMeta, bugComment, canRun, latestRuns, runComment, runLabels, runsOf, statusFromRuns } from './runs';
 import { EvidenceRef, UploadFile, uploadEvidence } from '../evidence/evidence';
@@ -158,6 +158,7 @@ export class CasesStore {
     progress: (p: { done: number; total: number; waiting: boolean }) => void,
     cancelled: () => boolean,
     spacingMs = 1000,
+    opts: { submit?: boolean } = {},
   ): Promise<{ created: TestCase[]; error: GitHubError | null }> {
     const created: TestCase[] = [];
     for (const draft of drafts) {
@@ -165,7 +166,9 @@ export class CasesStore {
       const started = Date.now();
       for (let attempt = 0; ; attempt++) {
         try {
-          created.push(await this.create(draft));
+          // With submit, each case goes straight to its suggested reviewer (if anyone can review it).
+          const reviewers = opts.submit ? this.suggestReviewers({ platforms: draft.platforms, author: null }) : [];
+          created.push(await this.create(draft, reviewers.length ? { submitTo: reviewers } : {}));
           break;
         } catch (e) {
           const err = asGitHubError(e);
@@ -220,6 +223,43 @@ export class CasesStore {
     });
     await addComment(gh, tc.id, submitComment(reviewers, resubmit));
     return this.upsert(fromIssue(issue));
+  }
+
+  /**
+   * Submits many drafts, each to its suggested reviewer (UX 1). Drafts nobody can review
+   * yet (no engineer on their platform) are skipped and returned.
+   */
+  async submitMany(
+    cases: TestCase[],
+    progress: (done: number) => void = () => {},
+    spacingMs = 800,
+  ): Promise<{ submitted: number; skipped: TestCase[]; error: GitHubError | null }> {
+    let submitted = 0;
+    const skipped: TestCase[] = [];
+    for (const tc of cases) {
+      const reviewers = this.suggestReviewers(tc);
+      if (!reviewers.length) {
+        skipped.push(tc);
+        continue;
+      }
+      try {
+        await this.submit(tc, reviewers);
+      } catch (e) {
+        return { submitted, skipped, error: asGitHubError(e) };
+      }
+      progress(++submitted);
+      if (submitted + skipped.length < cases.length) await sleep(spacingMs);
+    }
+    return { submitted, skipped, error: null };
+  }
+
+  /** UX 3: @-mention the people a case is waiting on. */
+  async remind(tc: TestCase): Promise<string[]> {
+    const who = tc.assignees.map((a) => a.login);
+    if (!who.length) return [];
+    await addComment(this.session.requireClient(), tc.id, remindComment(who));
+    this.writes.update((n) => n + 1);
+    return who;
   }
 
   /** AU-7: close as Won't test. */

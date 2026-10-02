@@ -4,14 +4,14 @@
 import { Platform } from '../config/team-config';
 import { PLATFORM_NAMES } from './model';
 
-export type TcmKind = 'review' | 'run' | 'submit' | 'edit' | 'close' | 'line' | 'assign' | 'bug';
+export type TcmKind = 'review' | 'run' | 'submit' | 'edit' | 'close' | 'line' | 'assign' | 'bug' | 'remind';
 
 export interface TcmMarker {
   kind: TcmKind;
   data: Record<string, unknown>;
 }
 
-const MARKER_RE = /^\s*<!--\s*tcm:(review|run|submit|edit|close|line|assign|bug)\s*(\{[\s\S]*?\})?\s*-->/;
+const MARKER_RE = /^\s*<!--\s*tcm:(review|run|submit|edit|close|line|assign|bug|remind)\s*(\{[\s\S]*?\})?\s*-->/;
 
 export function parseMarker(body: string): TcmMarker | null {
   const m = MARKER_RE.exec(body);
@@ -81,4 +81,9 @@ export function lineComment(step: number, original: string, note: string, sugges
 export function assignComment(assignees: string[], stage: string): string {
   const who = assignees.length ? mention(assignees) : 'nobody';
   return `${marker('assign', { assignees, stage })}\n👤 **Assigned to ${who}** to ${stage}.`;
+}
+
+/** A nudge to whoever the case is waiting on (UX 3); it doesn't change the version. */
+export function remindComment(who: string[]): string {
+  return `${marker('remind', { who })}\n👋 ${mention(who)} gentle reminder: this case is waiting for your review.`;
 }

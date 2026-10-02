@@ -22,7 +22,9 @@ import { avatarAt } from '../../core/avatar';
         @if (ws.config()) {
           <nav class="nav" aria-label="Main">
             <a [routerLink]="base() + '/cases'" routerLinkActive="active" queryParamsHandling="preserve">Test cases</a>
-            <a [routerLink]="base() + '/review'" routerLinkActive="active" queryParamsHandling="preserve">Review</a>
+            @if (canReview()) {
+              <a [routerLink]="base() + '/review'" routerLinkActive="active" queryParamsHandling="preserve">Review</a>
+            }
             <a [routerLink]="base() + '/inbox'" routerLinkActive="active" queryParamsHandling="preserve">
               Inbox
               @if (inbox.count()) {
@@ -242,6 +244,8 @@ export class RepoShell {
   private readonly route = inject(ActivatedRoute);
 
   protected readonly configPath = CONFIG_PATH;
+  /** Only engineers review, so the tab is a dead end for everyone else (UX 4). */
+  protected readonly canReview = computed(() => this.ws.roles().some((r) => r === 'android' || r === 'ios'));
 
   protected readonly repoName = computed(() => this.ws.repo()?.nameWithOwner ?? this.paramsName());
   protected readonly base = computed(() => `/r/${this.repoName()}`);

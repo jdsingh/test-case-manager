@@ -666,8 +666,8 @@ Scenario: Order history shows the new order
     await page.waitForURL(/\/repos/);
     await page.goto(`${BASE}/r/acme/shop-app-testbank/cases`);
     await page.locator('table.cases tbody tr').first().waitFor();
-    await page.getByRole('button', { name: 'Select to assign runners' }).click();
-    await page.getByLabel('Select all runnable cases').check();
+    await page.getByRole('button', { name: 'Select', exact: true }).click();
+    await page.getByLabel('Select all').check();
     check(await shows(page.getByText('3 selected')), 'only runnable cases selectable');
     await page.getByLabel('Android runner').selectOption('sam-android');
     await page.getByRole('button', { name: 'Apply' }).click();
@@ -840,6 +840,54 @@ Scenario: Order history shows the new order
     await page.getByRole('button', { name: 'Update this copy' }).click();
     await page.locator('main').getByText('In review').first().waitFor();
     check(await shows(page.locator('.step', { hasText: 'one confirmation email is sent' })), 'copy updated from the original, back to review');
+
+
+    // PM workflow, second UX round.
+    await page.getByLabel('Viewing as').selectOption('priya-pm');
+    await page.waitForURL(/\/cases/);
+    await rows.first().waitFor();
+    check((await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Review', exact: true }).count()) === 0, 'no Review tab for the PM (UX 4)');
+    check(await shows(page.getByRole('region', { name: 'Your turn' }).getByText(/draft.* to submit/)), '"Your turn" strip (UX 5)');
+
+    await page.getByRole('link', { name: 'New test case' }).click();
+    await page.getByLabel('Scenario name').fill('Saved card can be removed');
+    await page.getByLabel('Step 1 text').click();
+    await page.keyboard.type('a logged');
+    check(await shows(page.getByRole('option', { name: /a logged-in user with items in the cart/ })), 'step suggestions from earlier cases (UX 7)');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    check((await page.getByLabel('Step 1 text').inputValue()) === 'a logged-in user with items in the cart', 'suggestion accepted with the keyboard');
+    await page.getByLabel('Step 2 text').fill('the user removes the saved card');
+    await page.getByLabel('Step 3 text').fill('checkout works');
+    check(await shows(page.getByRole('note', { name: 'Writing tips' }).getByText('Say what the tester will see')), 'writing hint for a vague Then (UX 2)');
+    await page.getByLabel('Step 3 text').fill('the card is gone from the payment screen');
+    await page.getByLabel('Step 3 text').press('Enter');
+    await page.keyboard.type('a "Card removed" message shows'); // no waiting: like a fast typist
+    check((await page.getByLabel('Step 3 text').inputValue()) === 'the card is gone from the payment screen'
+      && (await page.getByLabel('Step 4 text').inputValue()) === 'a "Card removed" message shows', 'typing right after Enter lands in the new step');
+    await page.getByRole('button', { name: 'Save draft' }).click();
+    await page.getByText(/Created #\d+ as a draft/).waitFor();
+    await page.getByRole('link', { name: '← Test cases' }).click();
+
+    await page.getByRole('button', { name: 'Select', exact: true }).click();
+    for (const title of ['Cart persists after the app restarts', 'Saved card can be removed']) {
+      await rows.filter({ hasText: title }).getByRole('checkbox').check();
+    }
+    await page.getByRole('button', { name: 'Submit 2 drafts for review' }).click();
+    check(await shows(page.getByText('Submitted 2 drafts for review.')), 'bulk submit drafts (UX 1)');
+
+    await rows.filter({ hasText: 'Promo code updates' }).getByRole('link').click();
+    check(await shows(page.getByText('Waiting for').filter({ hasText: 'sam-android' })), 'waiting-on line instead of an error (UX 3)');
+    await page.getByRole('button', { name: 'Remind' }).click();
+    check(await shows(page.getByText('Reminded sam-android.')), 'Remind @-mentions the reviewer');
+
+    await page.getByRole('link', { name: '← Test cases' }).click();
+    await page.getByRole('link', { name: 'Import' }).click();
+    await page.getByLabel(/Paste the cells/).fill('Scenario\tPriority\tGiven\tWhen\tThen\nGift card applies\tP1\ta $20 gift card\tthe user enters its code\tthe total drops by $20');
+    await page.getByLabel(/Submit them for review straight away/).check();
+    await page.getByRole('button', { name: 'Import 1 and submit' }).click();
+    check(await shows(page.getByText('and sent them for review')), 'import and submit in one go (UX 1)');
+    await page.getByRole('link', { name: 'Back to the list' }).click();
 
     // Switch role; the Claude Code skill shows as installed.
     await page.getByLabel('Viewing as').selectOption('jo-ios');

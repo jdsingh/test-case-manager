@@ -99,7 +99,9 @@ export class CommandPalette {
             { id: 'a-session', group: 'Actions' as const, label: 'Start a test session', run: go('session') },
           ]
         : []),
-      { id: 'a-review', group: 'Actions', label: 'Review queue', run: go('review') },
+      ...(this.ws.roles().some((r) => r === 'android' || r === 'ios')
+        ? [{ id: 'a-review', group: 'Actions' as const, label: 'Review queue', run: go('review') }]
+        : []),
       { id: 'a-inbox', group: 'Actions', label: 'Inbox', run: go('inbox') },
       { id: 'a-dash', group: 'Actions', label: 'Dashboard', run: go('dashboard') },
       { id: 'a-team', group: 'Actions', label: 'Team settings', run: go('settings', 'team') },

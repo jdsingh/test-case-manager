@@ -18,7 +18,7 @@ import { Toasts } from '../../core/toast';
     </div>
   `,
   styles: `
-    .toasts { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 50; width: max-content; max-width: calc(100vw - 32px); }
+    .toasts { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 50; max-width: min(420px, calc(100vw - 32px)); }
     .toast { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; background: var(--text); color: var(--surface); box-shadow: var(--shadow); font-size: 13.5px; animation: up 0.18s ease-out; }
     .toast a { color: inherit; font-weight: 600; }
     .t-good > span:first-child { color: #4ac26b; font-weight: 800; }
