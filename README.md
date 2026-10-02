@@ -24,7 +24,15 @@ Milestone **M2 (test cases)** is built:
 - Import from a Google Sheets paste or a CSV file (auto-mapped columns, preview, duplicate and re-run detection, throttled creation with progress), or from pasted Gherkin with `@P0 @ios` tags
 - Export the current list view to CSV
 
-Still to come: review (M3), execution and evidence (M4), the dashboard (M5), the regression bank and Claude Code skill (M6).
+Milestone **M3 (review)** is built:
+
+- Review mode: a queue of the in-review cases you can review, with `A` approve, `R` request changes, `J`/`K` next/previous
+- Eligibility rules: Android or iOS engineers per the case's platforms; nobody approves a version they edited; one approval approves; reviews before a resubmit show as earlier versions
+- Comments on a single step, with suggested wording the author accepts in one click
+- Assignees follow the stage: reviewers while in review, one runner per platform once approved (fewest open cases first), the author on a change request; editable per platform
+- Inbox of everything assigned to you across features, with the count in the nav, the tab title and the favicon
+
+Still to come: execution and evidence (M4), the dashboard (M5), the regression bank and Claude Code skill (M6).
 
 ## Develop
 

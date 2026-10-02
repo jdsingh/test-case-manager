@@ -444,3 +444,31 @@ export async function reopenIssue(gh: GitHubClient, issueId: string): Promise<Is
   );
   return data.reopenIssue.issue;
 }
+
+export interface AssignedIssue {
+  issue: IssueNode;
+  projects: { id: string; number: number; title: string }[];
+}
+
+/** Open test cases in the repo assigned to `login`: the same set as GitHub's "Assigned to me" (IN-1). */
+export async function searchAssignedCases(
+  gh: GitHubClient,
+  nameWithOwner: string,
+  login: string,
+): Promise<{ total: number; items: AssignedIssue[] }> {
+  const q = `repo:${nameWithOwner} is:issue is:open label:testcase assignee:${login}`;
+  type Node = IssueNode & { projectItems: { nodes: { project: { id: string; number: number; title: string } }[] } };
+  const data = await gh.graphql<{ search: { issueCount: number; nodes: (Node | Record<string, never>)[] } }>(
+    `query($q: String!) {
+      search(query: $q, type: ISSUE, first: 100) {
+        issueCount
+        nodes { ... on Issue { ${ISSUE_FIELDS} projectItems(first: 10) { nodes { project { id number title } } } } }
+      }
+    }`,
+    { q },
+  );
+  const items = data.search.nodes
+    .filter((n): n is Node => 'id' in n)
+    .map(({ projectItems, ...issue }) => ({ issue, projects: projectItems.nodes.map((p) => p.project) }));
+  return { total: data.search.issueCount, items };
+}

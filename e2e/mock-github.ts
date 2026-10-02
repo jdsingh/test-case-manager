@@ -151,6 +151,17 @@ export class MockGitHub {
       return ok({ viewer: { ...viewer, id: this.userId(viewer.login), avatarUrl: avatar(viewer.login) } });
     }
     // ---- test case issues ----
+    if (query.includes('search(query: $q, type: ISSUE')) {
+      const q = String(v['q']);
+      const assignee = /assignee:(\S+)/.exec(q)?.[1] ?? '';
+      const nodes = this.issues
+        .filter((i) => i.state === 'OPEN' && i.labels.includes('testcase') && i.assignees.includes(assignee))
+        .map((i) => ({
+          ...this.issueNode(i),
+          projectItems: { nodes: i.projectIds.map((id) => ({ project: { id, number: 7, title: 'Checkout v2' } })) },
+        }));
+      return ok({ search: { issueCount: nodes.length, nodes } });
+    }
     if (query.includes('items(first: 100')) {
       const nodes = this.issues
         .filter((i) => i.projectIds.includes(String(v['id'])))

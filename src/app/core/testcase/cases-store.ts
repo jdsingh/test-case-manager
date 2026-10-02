@@ -30,7 +30,8 @@ import {
   labelsFor,
   renderBody,
 } from './model';
-import { closeComment, editComment, submitComment } from './comments';
+import { closeComment, editComment, lineComment, reviewComment, submitComment } from './comments';
+import { Decision, LineNote } from './review';
 
 export type CasesLoad = { status: 'idle' | 'loading' | 'ready' } | { status: 'error'; error: GitHubError };
 
@@ -51,6 +52,8 @@ export class CasesStore {
   private readonly features = inject(FeatureSelection);
 
   readonly cases = signal<TestCase[]>([]);
+  /** Bumped after every write, so views like the inbox know to refresh. */
+  readonly writes = signal(0);
   readonly load = signal<CasesLoad>({ status: 'idle' });
   private loadedFor: string | null = null;
   private loadedAt = 0;
@@ -230,6 +233,72 @@ export class CasesStore {
     return this.upsert(fromIssue(issue));
   }
 
+  // ---- review (5.3) ----------------------------------------------------------------
+
+  /**
+   * Records a review (RV-2, RV-3). One approval moves the case to Approved and assigns it
+   * to one engineer per platform to run (5.3a); a change request sends it to the author.
+   */
+  async review(tc: TestCase, decision: Decision, note: string, platform: Platform): Promise<TestCase> {
+    const gh = this.session.requireClient();
+    const approve = decision === 'approve';
+    const assignees = approve ? this.suggestExecutors(tc) : tc.author ? [tc.author] : [];
+    await addComment(gh, tc.id, reviewComment(platform, decision, note));
+    const issue = await updateIssue(gh, {
+      id: tc.id,
+      labelIds: await this.labelIds(this.labelsWithStatus(tc, approve ? 'approved' : 'changes-requested')),
+      assigneeIds: await this.idsFor(assignees),
+    });
+    return this.upsert(fromIssue(issue));
+  }
+
+  /** LR-1 / LR-2: a comment on one step, optionally with suggested wording. */
+  async commentOnStep(tc: TestCase, step: number, note: string, suggestion?: string): Promise<void> {
+    const original = tc.steps[step]?.text ?? '';
+    await addComment(this.session.requireClient(), tc.id, lineComment(step, original, note, suggestion));
+    this.writes.update((n) => n + 1);
+  }
+
+  /** LR-2: accepting a suggestion is an edit like any other (AU-8). */
+  async applySuggestion(tc: TestCase, note: LineNote): Promise<TestCase> {
+    if (note.suggestion === null || !tc.steps[note.step]) return tc;
+    const draft = draftOf(tc);
+    draft.steps[note.step] = { ...draft.steps[note.step], text: note.suggestion };
+    return this.save(tc, draft);
+  }
+
+  /** Manual reassignment (AS-2, AS-3). */
+  async assign(tc: TestCase, logins: string[]): Promise<TestCase> {
+    const issue = await updateIssue(this.session.requireClient(), {
+      id: tc.id,
+      assigneeIds: await this.idsFor(logins),
+    });
+    return this.upsert(fromIssue(issue));
+  }
+
+  /**
+   * One engineer per target platform to run the case (5.3a), each the platform engineer
+   * with the fewest cases waiting to be run; different people where possible (AS-4).
+   */
+  suggestExecutors(tc: Pick<TestCase, 'platforms'>): string[] {
+    const config = this.ws.config();
+    if (!config) return [];
+    const toRun = (login: string) =>
+      this.openCases().filter(
+        (c) => ['approved', 'failed', 'blocked'].includes(c.status ?? '') && c.assignees.some((a) => sameLogin(a.login, login)),
+      ).length;
+    const chosen: string[] = [];
+    for (const p of tc.platforms) {
+      const pool = config.team[p];
+      if (!pool.length) continue;
+      const ranked = [...pool].sort(
+        (a, b) => Number(includesLogin(chosen, a)) - Number(includesLogin(chosen, b)) || toRun(a) - toRun(b),
+      );
+      if (!includesLogin(chosen, ranked[0])) chosen.push(ranked[0]);
+    }
+    return chosen;
+  }
+
   // ---- reviewers (5.3a) ------------------------------------------------------------
 
   /** Engineers allowed to review a case (RV-2). */
@@ -300,6 +369,7 @@ export class CasesStore {
   }
 
   private upsert(tc: TestCase): TestCase {
+    this.writes.update((n) => n + 1);
     this.cases.update((list) => {
       const i = list.findIndex((c) => c.number === tc.number);
       if (i < 0) return [...list, tc];

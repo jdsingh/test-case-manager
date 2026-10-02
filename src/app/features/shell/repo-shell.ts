@@ -3,6 +3,7 @@ import { ActivatedRoute, Router, RouterLink, RouterLinkActive, RouterOutlet } fr
 import { Session } from '../../core/session';
 import { Workspace } from '../../core/workspace';
 import { FeatureSelection } from '../../core/feature-selection';
+import { InboxStore } from '../../core/testcase/inbox-store';
 import { CONFIG_PATH } from '../../core/github/api';
 import { ROLE_NAMES } from '../../core/config/team-config';
 import { avatarAt } from '../../core/avatar';
@@ -20,7 +21,13 @@ import { avatarAt } from '../../core/avatar';
         @if (ws.config()) {
           <nav class="nav" aria-label="Main">
             <a [routerLink]="base() + '/cases'" routerLinkActive="active" queryParamsHandling="preserve">Test cases</a>
-            <a [routerLink]="base() + '/inbox'" routerLinkActive="active" queryParamsHandling="preserve">Inbox</a>
+            <a [routerLink]="base() + '/review'" routerLinkActive="active" queryParamsHandling="preserve">Review</a>
+            <a [routerLink]="base() + '/inbox'" routerLinkActive="active" queryParamsHandling="preserve">
+              Inbox
+              @if (inbox.count()) {
+                <span class="nav-count" [attr.aria-label]="inbox.count() + ' need your attention'">{{ inbox.count() }}</span>
+              }
+            </a>
             <a [routerLink]="base() + '/dashboard'" routerLinkActive="active" queryParamsHandling="preserve">Dashboard</a>
             <a [routerLink]="base() + '/settings/team'" routerLinkActive="active" queryParamsHandling="preserve">Team</a>
           </nav>
@@ -148,6 +155,15 @@ import { avatarAt } from '../../core/avatar';
       background: var(--surface-2);
       color: var(--text);
     }
+    .nav-count {
+      margin-left: 4px;
+      padding: 0 6px;
+      border-radius: 9px;
+      font-size: 11px;
+      font-weight: 700;
+      background: var(--bad);
+      color: #fff;
+    }
     .nav a.active {
       background: var(--accent-soft);
       color: var(--accent);
@@ -179,6 +195,7 @@ export class RepoShell {
   protected readonly session = inject(Session);
   protected readonly ws = inject(Workspace);
   protected readonly features = inject(FeatureSelection);
+  protected readonly inbox = inject(InboxStore);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
 

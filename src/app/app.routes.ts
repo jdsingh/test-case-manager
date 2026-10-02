@@ -10,6 +10,8 @@ import { CasesListPage } from './features/cases/cases-list.page';
 import { CaseDetailPage } from './features/cases/case-detail.page';
 import { CaseEditorPage } from './features/cases/case-editor.page';
 import { ImportPage } from './features/cases/import.page';
+import { InboxPage } from './features/inbox/inbox.page';
+import { ReviewPage } from './features/review/review.page';
 
 const leaveEditorGuard = (c: CaseEditorPage) => c.canLeave();
 
@@ -47,16 +49,8 @@ export const routes: Routes = [
         canDeactivate: [leaveEditorGuard],
         title: 'Edit test case · Test Case Manager',
       },
-      {
-        path: 'inbox',
-        component: ComingSoonPage,
-        title: 'Inbox · Test Case Manager',
-        data: {
-          heading: 'Inbox',
-          milestone: 'M3',
-          blurb: 'Everything assigned to you: cases to review, cases to run and change requests.',
-        },
-      },
+      { path: 'inbox', component: InboxPage, title: 'Inbox · Test Case Manager' },
+      { path: 'review', component: ReviewPage, title: 'Review · Test Case Manager' },
       {
         path: 'dashboard',
         component: ComingSoonPage,

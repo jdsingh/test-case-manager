@@ -4,14 +4,14 @@
 import { Platform } from '../config/team-config';
 import { PLATFORM_NAMES } from './model';
 
-export type TcmKind = 'review' | 'run' | 'submit' | 'edit' | 'close';
+export type TcmKind = 'review' | 'run' | 'submit' | 'edit' | 'close' | 'line' | 'assign';
 
 export interface TcmMarker {
   kind: TcmKind;
   data: Record<string, unknown>;
 }
 
-const MARKER_RE = /^\s*<!--\s*tcm:(review|run|submit|edit|close)\s*(\{[\s\S]*?\})?\s*-->/;
+const MARKER_RE = /^\s*<!--\s*tcm:(review|run|submit|edit|close|line|assign)\s*(\{[\s\S]*?\})?\s*-->/;
 
 export function parseMarker(body: string): TcmMarker | null {
   const m = MARKER_RE.exec(body);
@@ -34,7 +34,8 @@ export function commentText(body: string): string {
 }
 
 function marker(kind: TcmKind, data: Record<string, unknown> = {}): string {
-  const json = Object.keys(data).length ? ` ${JSON.stringify(data)}` : '';
+  // "-->" in user text would end the HTML comment early; \u003e still parses as ">".
+  const json = Object.keys(data).length ? ` ${JSON.stringify(data).replace(/-->/g, '--\\u003e')}` : '';
   return `<!-- tcm:${kind}${json} -->`;
 }
 
@@ -62,4 +63,22 @@ export function reviewComment(platform: Platform, decision: 'approve' | 'request
   const name = PLATFORM_NAMES[platform];
   const head = decision === 'approve' ? `✅ **Approved for ${name}**` : `✏️ **Changes requested (${name})**`;
   return `${marker('review', { platform, decision })}\n${head}${note.trim() ? `\n\n${note.trim()}` : ''}`;
+}
+
+/**
+ * A comment on one step (LR-1), optionally suggesting new wording (LR-2). The step's text
+ * at the time is stored so the comment can show as outdated once the step changes.
+ */
+export function lineComment(step: number, original: string, note: string, suggestion?: string): string {
+  const data: Record<string, unknown> = { step, original };
+  if (suggestion !== undefined) data['suggestion'] = suggestion;
+  const quote = `> Step ${step + 1}: ${original}`;
+  const body = note.trim() ? `\n\n${note.trim()}` : '';
+  const suggest = suggestion !== undefined ? `\n\n**Suggested wording:** ${suggestion}` : '';
+  return `${marker('line', data)}\n💬 **Comment on step ${step + 1}**\n\n${quote}${body}${suggest}`;
+}
+
+export function assignComment(assignees: string[], stage: string): string {
+  const who = assignees.length ? mention(assignees) : 'nobody';
+  return `${marker('assign', { assignees, stage })}\n👤 **Assigned to ${who}** to ${stage}.`;
 }

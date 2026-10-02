@@ -10,7 +10,13 @@ import { TcmMarker, commentText, parseMarker } from '../../core/testcase/comment
 import { includesLogin } from '../../core/config/team-config';
 import { timeAgo } from '../../core/time';
 import { avatarAt } from '../../core/avatar';
-import { Avatars, GherkinView, PlatformBadges, PriorityBadge, StatusBadge } from './badges';
+import { Avatars, PlatformBadges, PriorityBadge, StatusBadge } from './badges';
+import { StepNotes } from '../review/step-notes';
+import { ReviewPanel } from '../review/review-panel';
+import { historyOf } from '../../core/testcase/review';
+import { Session } from '../../core/session';
+import { Platform, sameLogin } from '../../core/config/team-config';
+import { PLATFORM_NAMES } from '../../core/testcase/model';
 
 interface ActivityItem {
   id: string;
@@ -19,6 +25,7 @@ interface ActivityItem {
   avatarUrl: string;
   createdAt: string;
   marker: TcmMarker | null;
+  stale: boolean;
   headline: string;
   rest: string;
 }
@@ -26,7 +33,7 @@ interface ActivityItem {
 /** One test case: scenario, state, actions and its review history. */
 @Component({
   selector: 'app-case-detail-page',
-  imports: [RouterLink, GherkinView, PriorityBadge, StatusBadge, PlatformBadges, Avatars],
+  imports: [RouterLink, StepNotes, ReviewPanel, PriorityBadge, StatusBadge, PlatformBadges, Avatars],
   template: `
     <main class="page stack">
       <a class="small back" routerLink=".." queryParamsHandling="preserve">← Test cases</a>
@@ -54,6 +61,9 @@ interface ActivityItem {
             } @else {
               <span class="muted small">Unassigned</span>
             }
+            @if (ws.canWriteRepo() && !tc.closed && !ws.isViewerOnly()) {
+              <button class="btn btn-link small" type="button" (click)="openAssign(tc)">change</button>
+            }
             <span class="muted small">· updated {{ ago(tc.updatedAt) }}</span>
           </div>
         </header>
@@ -77,6 +87,10 @@ interface ActivityItem {
             <span class="spacer"></span>
             <a class="small" [href]="tc.url" target="_blank" rel="noopener">Open in GitHub</a>
           </div>
+        }
+
+        @if (tc.status === 'in-review') {
+          <app-review-panel [tc]="tc" [history]="history()" [showReason]="true" (decided)="reload()" />
         }
 
         @if (changeRequest(); as cr) {
@@ -106,7 +120,7 @@ interface ActivityItem {
           </section>
         }
         @if (tc.steps.length) {
-          <app-gherkin [name]="tc.title" [steps]="tc.steps" />
+          <app-step-notes [tc]="tc" [notes]="history().lineNotes" [canAccept]="canAccept()" (changed)="reload()" />
         }
         @if (tc.extraBody) {
           <section class="stack" style="gap: 4px">
@@ -127,6 +141,9 @@ interface ActivityItem {
                       <strong>{{ a.author }}</strong>
                       <span class="muted"> · {{ ago(a.createdAt) }} · </span>
                       <a class="muted" [href]="a.url" target="_blank" rel="noopener">view</a>
+                      @if (a.stale) {
+                        <span class="badge badge-outline small stale">earlier version</span>
+                      }
                     </div>
                     <div>{{ a.headline }}</div>
                     @if (a.rest) {
@@ -178,6 +195,42 @@ interface ActivityItem {
           </form>
         </dialog>
 
+        <dialog #assignDialog aria-labelledby="assign-title">
+          <form method="dialog" class="stack" (submit)="$event.preventDefault(); saveAssign(tc)">
+            <h2 id="assign-title">{{ assignTitle() }}</h2>
+            @if (assignSlots().length) {
+              @for (slot of assignSlots(); track slot.platform) {
+                <label class="field small">
+                  {{ slot.name }}
+                  <select (change)="setSlot(slot.platform, $any($event.target).value)">
+                    <option value="" [selected]="!slotPick()[slot.platform]">Nobody</option>
+                    @for (login of slot.people; track login) {
+                      <option [value]="login" [selected]="slotPick()[slot.platform] === login">{{ login }}</option>
+                    }
+                  </select>
+                </label>
+              }
+            } @else {
+              <fieldset class="people">
+                <legend class="sr-only">Assignees</legend>
+                @for (login of assignOptions(); track login) {
+                  <label class="row">
+                    <input type="checkbox" [checked]="assignPick().includes(login)" (change)="toggleAssign(login)" />
+                    {{ login }}
+                  </label>
+                } @empty {
+                  <p class="muted small">Nobody on the team fits this stage yet. Add people in Team settings.</p>
+                }
+              </fieldset>
+            }
+            <div class="row">
+              <span class="spacer"></span>
+              <button class="btn" type="button" (click)="assignDialog.close()">Cancel</button>
+              <button class="btn btn-primary" type="submit" [disabled]="busy()">Save</button>
+            </div>
+          </form>
+        </dialog>
+
         <dialog #closeDialog aria-labelledby="close-title">
           <form method="dialog" class="stack" (submit)="$event.preventDefault(); close(tc, reason.value)">
             <h2 id="close-title">Close as won't test</h2>
@@ -212,6 +265,7 @@ interface ActivityItem {
     .act-submit { border-left-color: var(--warn); }
     .act-edit { border-left-color: var(--text-2); }
     .act .avatar { margin-top: 2px; }
+    .stale { margin-left: 6px; }
     .people { border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   `,
 })
@@ -220,6 +274,8 @@ export class CaseDetailPage {
   private readonly store = inject(CasesStore);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly session = inject(Session);
+  private readonly assignDialogRef = viewChild<ElementRef<HTMLDialogElement>>('assignDialog');
   private readonly submitDialog = viewChild<ElementRef<HTMLDialogElement>>('submitDialog');
   private readonly closeDialogRef = viewChild<ElementRef<HTMLDialogElement>>('closeDialog');
 
@@ -232,6 +288,34 @@ export class CaseDetailPage {
   protected readonly reviewers = signal<string[]>([]);
 
   protected readonly tc = computed(() => this.store.byNumber(this.number()));
+  protected readonly history = computed(() => historyOf(this.comments()));
+  /** Suggestions are accepted by the PM or whoever wrote the case. */
+  protected readonly canAccept = computed(() => {
+    const me = this.session.viewer()?.login ?? '';
+    const tc = this.tc();
+    return this.ws.canWriteRepo() && (this.ws.roles().includes('pm') || (!!tc?.author && sameLogin(tc.author, me)));
+  });
+
+  // Manual assignment (AS-2): reviewers while in review, one runner per platform once approved.
+  protected readonly assignPick = signal<string[]>([]);
+  protected readonly slotPick = signal<Partial<Record<Platform, string>>>({});
+  protected readonly assignSlots = computed(() => {
+    const tc = this.tc();
+    const config = this.ws.config();
+    if (!tc || !config || !['approved', 'passed', 'failed', 'blocked'].includes(tc.status ?? '')) return [];
+    return tc.platforms.map((p) => ({ platform: p, name: `Runs on ${PLATFORM_NAMES[p]}`, people: config.team[p] }));
+  });
+  protected readonly assignOptions = computed(() => {
+    const tc = this.tc();
+    const config = this.ws.config();
+    if (!tc || !config) return [];
+    if (tc.status === 'in-review') return this.store.eligibleReviewers(tc.platforms);
+    const all = [...config.team.pm, ...config.team.techLead, ...config.team.android, ...config.team.ios];
+    return all.filter((l, i) => all.findIndex((x) => sameLogin(x, l)) === i);
+  });
+  protected readonly assignTitle = computed(() =>
+    this.tc()?.status === 'in-review' ? 'Who reviews it' : this.assignSlots().length ? 'Who runs it' : 'Assignees',
+  );
   protected readonly ago = (iso: string) => timeAgo(iso);
   protected readonly sized = (url: string) => avatarAt(url, 44);
 
@@ -248,6 +332,7 @@ export class CaseDetailPage {
           avatarUrl: c.author?.avatarUrl ?? '',
           createdAt: c.createdAt,
           marker,
+          stale: marker?.kind === 'review' && !!this.history().reviews.find((r) => r.id === c.id && !r.current),
           headline: stripMd(first ?? ''),
           rest: stripMd(rest.join('\n')),
         };
@@ -280,6 +365,41 @@ export class CaseDetailPage {
 
   protected assigneeNames(tc: TestCase): string {
     return tc.assignees.map((a) => a.login).join(', ');
+  }
+
+  protected openAssign(tc: TestCase): void {
+    const current = tc.assignees.map((a) => a.login);
+    this.assignPick.set(current);
+    const config = this.ws.config();
+    const slots: Partial<Record<Platform, string>> = {};
+    for (const p of tc.platforms) {
+      slots[p] = current.find((l) => config?.team[p].some((x) => sameLogin(x, l)));
+    }
+    this.slotPick.set(slots);
+    this.assignDialogRef()?.nativeElement.showModal();
+  }
+
+  protected toggleAssign(login: string): void {
+    this.assignPick.update((r) => (r.some((x) => sameLogin(x, login)) ? r.filter((x) => !sameLogin(x, login)) : [...r, login]));
+  }
+
+  protected setSlot(p: Platform, login: string): void {
+    this.slotPick.update((s) => ({ ...s, [p]: login || undefined }));
+  }
+
+  protected async saveAssign(tc: TestCase): Promise<void> {
+    const logins = this.assignSlots().length
+      ? Object.values(this.slotPick()).filter((l): l is string => !!l)
+      : this.assignPick();
+    const unique = logins.filter((l, i) => logins.findIndex((x) => sameLogin(x, l)) === i);
+    await this.act(async () => {
+      await this.store.assign(tc, unique);
+      this.assignDialogRef()?.nativeElement.close();
+    });
+  }
+
+  protected reload(): void {
+    void this.loadDetail(this.number());
   }
 
   protected openSubmit(): void {

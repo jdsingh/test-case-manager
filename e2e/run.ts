@@ -418,6 +418,131 @@ Scenario: Order history shows the new order
     check(table[0].includes('Latest Android run') && table.some((r) => r[1] === 'Apple Pay checkout'), 'CSV columns and content');
     await page.context().close();
   }
+
+  // 8. M3: review.
+  console.log('Review (M3)');
+  {
+    const { renderBody } = await import('../src/app/core/testcase/model');
+    const { submitComment, editComment, parseMarker } = await import('../src/app/core/testcase/comments');
+    const gh = new MockGitHub();
+    gh.labels = (await import('../src/app/core/config/labels')).LABELS.map((l) => l.name);
+    gh.configText = JSON.stringify({
+      version: 1,
+      team: { pm: ['priya-pm'], techLead: ['alex-lead'], android: ['sam-android', 'lee-android'], ios: ['jo-ios'] },
+    });
+    const body = (title: string, platforms: ('android' | 'ios')[]) =>
+      renderBody({
+        title, priority: 'P1', platforms, preconditions: '',
+        steps: [
+          { keyword: 'Given', text: 'a cart totalling $50' },
+          { keyword: 'When', text: 'the user applies SAVE10' },
+          { keyword: 'Then', text: 'the total is updated' },
+        ],
+      });
+    const labels = (status: string, platforms: string[]) => ['testcase', 'priority:P1', `status:${status}`, ...platforms.map((p) => `platform:${p}`)];
+    const at = (m: number) => `2026-10-01T09:${String(m).padStart(2, '0')}:00Z`;
+    gh.addIssue({ title: '[TC] Promo code updates the total', body: body('Promo code updates the total', ['android', 'ios']), labels: labels('in-review', ['android', 'ios']), assignees: ['sam-android'],
+      comments: [{ id: 'k1', body: submitComment(['sam-android'], false), createdAt: at(1), author: 'priya-pm' }] });
+    gh.addIssue({ title: '[TC] Apple Pay checkout', body: body('Apple Pay checkout', ['ios']), labels: labels('in-review', ['ios']), assignees: ['jo-ios'],
+      comments: [{ id: 'k2', body: submitComment(['jo-ios'], false), createdAt: at(2), author: 'priya-pm' }] });
+    gh.addIssue({ title: '[TC] Back keeps the cart', body: body('Back keeps the cart', ['android']), labels: labels('in-review', ['android']), assignees: ['sam-android'],
+      comments: [
+        { id: 'k3', body: submitComment(['lee-android'], false), createdAt: at(3), author: 'priya-pm' },
+        { id: 'k4', body: editComment(['steps'], true, ['sam-android']), createdAt: at(4), author: 'sam-android' },
+      ] });
+    gh.addIssue({ title: '[TC] Already approved', body: body('Already approved', ['android', 'ios']), labels: labels('approved', ['android', 'ios']), assignees: ['sam-android', 'jo-ios'] });
+
+    // Sam, an Android engineer.
+    let page = await newPage(gh);
+    await page.goto(`${BASE}/connect`);
+    await connect(page, 'tok-sam-android');
+    await page.waitForURL(/\/repos/);
+    await page.goto(`${BASE}/r/acme/shop-app-testbank`);
+    await page.waitForURL(/\/inbox/);
+    check(await shows(page.locator('section.group', { hasText: 'To review' }).getByText('Promo code updates the total')), 'inbox lists cases to review');
+    check(await shows(page.locator('.nav-count', { hasText: '3' })), 'nav shows the inbox count');
+    check(await page.waitForFunction(() => document.title.startsWith('(3) Inbox')).then(() => true, () => false), 'tab title carries the count (IN-2)');
+    await page.screenshot({ path: join(SHOTS, '14-inbox.png'), fullPage: true });
+
+    await page.getByRole('link', { name: 'Review', exact: true }).click();
+    await page.waitForURL(/\/review/);
+    const queue = page.getByRole('navigation', { name: 'Review queue' }).getByRole('button');
+    check(await countIs(queue, 2), 'queue has the Android-eligible cases only (RV-2)');
+    check(await shows(page.getByRole('heading', { name: /Promo code updates the total/ })), 'first case opened');
+
+    // Comment on a step with a suggestion (LR-1, LR-2).
+    await page.locator('.step').nth(2).hover();
+    await page.getByRole('button', { name: 'Comment on step 3' }).click();
+    await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Say what the total becomes.');
+    await page.getByLabel('Suggest new wording').check();
+    await page.getByRole('textbox', { name: 'Suggested wording' }).fill('the total shows $45.00');
+    await page.getByRole('button', { name: 'Comment', exact: true }).click();
+    await page.locator('.note', { hasText: 'Say what the total becomes.' }).waitFor();
+    const line = parseMarker(gh.issue(1).comments.at(-1)!.body);
+    check(line?.kind === 'line' && line.data['step'] === 2 && line.data['suggestion'] === 'the total shows $45.00', 'step comment stored with its suggestion');
+    await page.screenshot({ path: join(SHOTS, '15-review-mode.png'), fullPage: true });
+
+    // A approves; the case moves to its runners (5.3a).
+    await page.locator('h1').click();
+    await page.keyboard.press('a');
+    await page.getByText('Approved #1 Promo code updates the total.').waitFor();
+    const approved = gh.issue(1);
+    check(approved.labels.includes('status:approved'), 'one approval approves the case (RV-3)');
+    check(approved.assignees.join() === 'lee-android,jo-ios', 'assigned to the least-busy Android engineer and the iOS engineer');
+    check(parseMarker(approved.comments.at(-1)!.body)?.data['platform'] === 'android', 'review recorded for Android');
+
+    // AU-9: Sam edited #3, so Sam can't approve it.
+    check(await shows(page.getByRole('heading', { name: /Back keeps the cart/ })), 'moves on to the next case');
+    check(await shows(page.getByText('You edited this version')), "can't approve own edit (AU-9)");
+    await page.keyboard.press('a');
+    await page.waitForTimeout(300);
+    check(gh.issue(3).labels.includes('status:in-review'), 'shortcut does nothing when not allowed');
+    await page.context().close();
+
+    // Jo (iOS) requests changes on the iOS-only case.
+    page = await newPage(gh);
+    await page.goto(`${BASE}/connect`);
+    await connect(page, 'tok-jo-ios');
+    await page.waitForURL(/\/repos/);
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/review`);
+    await page.getByRole('heading', { name: /Apple Pay checkout/ }).waitFor();
+    await page.locator('.step').nth(2).hover();
+    await page.getByRole('button', { name: 'Comment on step 3' }).click();
+    await page.getByLabel('Suggest new wording').check();
+    await page.getByRole('textbox', { name: 'Suggested wording' }).fill('the order confirmation shows');
+    await page.getByRole('button', { name: 'Comment', exact: true }).click();
+    await page.locator('.note', { hasText: 'the order confirmation shows' }).waitFor();
+    await page.getByRole('button', { name: /Request changes/ }).click();
+    check(await shows(page.getByText('Say what needs to change')), 'a change request needs a comment');
+    await page.getByRole('textbox', { name: 'Review comment' }).fill('Then step is vague; see my suggestion.');
+    await page.getByRole('button', { name: /Request changes/ }).click();
+    await page.getByText('Requested changes on #2').waitFor();
+    check(gh.issue(2).labels.includes('status:changes-requested') && gh.issue(2).assignees.join() === 'priya-pm', 'back to the author (5.3a)');
+    await page.context().close();
+
+    // Priya accepts the suggestion and reassigns runners.
+    page = await newPage(gh);
+    await page.goto(`${BASE}/connect`);
+    await connect(page, 'tok-priya-pm');
+    await page.waitForURL(/\/repos/);
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/2`);
+    await page.getByText('jo-ios requested changes').waitFor();
+    await page.getByRole('button', { name: 'Accept suggestion' }).click();
+    await page.locator('.tag', { hasText: 'applied' }).waitFor();
+    check(gh.issue(2).body.includes('Then the order confirmation shows'), 'suggestion applied to the step');
+    check(gh.issue(2).labels.includes('status:changes-requested'), 'still waiting for a resubmit');
+    await page.screenshot({ path: join(SHOTS, '16-suggestion-applied.png'), fullPage: true });
+
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/1`);
+    await page.getByRole('button', { name: 'change' }).click();
+    await page.getByLabel('Runs on Android').selectOption('sam-android');
+    await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await page.waitForTimeout(300);
+    check(gh.issue(1).assignees.join() === 'sam-android,jo-ios', 'runner reassigned per platform (AS-2)');
+    check(await shows(page.getByText('earlier version').or(page.getByText('Approved for Android'))), 'review history shown');
+    await page.context().close();
+  }
 } catch (e) {
   failures++;
   console.log(`  ✗ ${(e as Error).message.split('\n')[0]}`);
