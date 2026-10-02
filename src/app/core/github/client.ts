@@ -73,7 +73,13 @@ export class GitHubClient {
     return (await res.json()) as T;
   }
 
-  private async send(method: string, path: string, body?: unknown): Promise<Response> {
+  /** Raw file bytes from a REST endpoint (e.g. repo contents with the raw media type). */
+  async restBlob(path: string): Promise<Blob> {
+    const res = await this.send('GET', path, undefined, 'application/vnd.github.raw');
+    return res.blob();
+  }
+
+  private async send(method: string, path: string, body?: unknown, accept?: string): Promise<Response> {
     let res: Response;
     try {
       res = await this.fetchImpl(GITHUB_API + path, {
@@ -82,6 +88,7 @@ export class GitHubClient {
           Authorization: `bearer ${this.token}`,
           'Content-Type': 'application/json',
           'X-GitHub-Api-Version': '2022-11-28',
+          ...(accept ? { Accept: accept } : {}),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
       });

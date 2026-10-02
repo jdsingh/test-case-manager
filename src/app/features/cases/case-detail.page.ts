@@ -12,6 +12,7 @@ import { timeAgo } from '../../core/time';
 import { avatarAt } from '../../core/avatar';
 import { Avatars, PlatformBadges, PriorityBadge, StatusBadge } from './badges';
 import { StepNotes } from '../review/step-notes';
+import { RunsSection } from '../runs/runs-section';
 import { ReviewPanel } from '../review/review-panel';
 import { historyOf } from '../../core/testcase/review';
 import { Session } from '../../core/session';
@@ -33,7 +34,7 @@ interface ActivityItem {
 /** One test case: scenario, state, actions and its review history. */
 @Component({
   selector: 'app-case-detail-page',
-  imports: [RouterLink, StepNotes, ReviewPanel, PriorityBadge, StatusBadge, PlatformBadges, Avatars],
+  imports: [RouterLink, StepNotes, ReviewPanel, RunsSection, PriorityBadge, StatusBadge, PlatformBadges, Avatars],
   template: `
     <main class="page stack">
       <a class="small back" routerLink=".." queryParamsHandling="preserve">← Test cases</a>
@@ -128,6 +129,8 @@ interface ActivityItem {
             <p class="notes">{{ tc.extraBody }}</p>
           </section>
         }
+
+        <app-runs-section [tc]="tc" [comments]="comments()" (changed)="reload()" />
 
         <section class="stack" style="gap: 8px">
           <h2 class="h-small">Activity</h2>
@@ -282,7 +285,7 @@ export class CaseDetailPage {
   private readonly number = toSignal(this.route.paramMap.pipe(map((p) => Number(p.get('number')))), {
     requireSync: true,
   });
-  private readonly comments = signal<CommentNode[]>([]);
+  protected readonly comments = signal<CommentNode[]>([]);
   protected readonly error = signal<string | null>(null);
   protected readonly busy = signal(false);
   protected readonly reviewers = signal<string[]>([]);
@@ -324,7 +327,14 @@ export class CaseDetailPage {
       .map((c) => {
         const marker = parseMarker(c.body);
         const text = marker ? commentText(c.body) : c.body.trim();
-        const [first, ...rest] = text.split(/\n+/);
+        // Evidence links read as noise here; the Runs section shows the files themselves.
+        const evidence = text.split('\n').filter((l) => /^!?\[[^\]]*\]\(https:\/\/github\.com\/[^)]*\/blob\/tcm-evidence\//.test(l.trim()));
+        const cleaned = text
+          .split('\n')
+          .filter((l) => !evidence.includes(l))
+          .join('\n')
+          .concat(evidence.length ? `\n${evidence.length} evidence file${evidence.length === 1 ? '' : 's'}` : '');
+        const [first, ...rest] = cleaned.split(/\n+/);
         return {
           id: c.id,
           url: c.url,

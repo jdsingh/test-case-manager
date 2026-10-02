@@ -37,6 +37,8 @@ export interface TeamConfig {
   features: Record<string, FeatureSettings>;
   readiness: { blockingPriorities: Priority[] };
   assignment: { defaultReviewer: DefaultReviewers };
+  /** Where bugs from failed runs are filed (EX-6); defaults to the testbank repo. */
+  bugs: { repo: string | null };
 }
 
 export type ParseResult =
@@ -157,6 +159,14 @@ export function parseConfig(text: string): ParseResult {
     }
   }
 
+  let bugRepo: string | null = null;
+  const rawBugs = raw['bugs'];
+  if (rawBugs !== undefined) {
+    const r = isObject(rawBugs) ? rawBugs['repo'] : undefined;
+    if (typeof r === 'string' && /^[\w.-]+\/[\w.-]+$/.test(r)) bugRepo = r;
+    else errors.push('"bugs.repo" must look like "acme/shop-app".');
+  }
+
   if (errors.length) return { ok: false, errors };
   return {
     ok: true,
@@ -169,6 +179,7 @@ export function parseConfig(text: string): ParseResult {
       features,
       readiness: { blockingPriorities },
       assignment: { defaultReviewer },
+      bugs: { repo: bugRepo },
     },
   };
 }

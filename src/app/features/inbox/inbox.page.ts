@@ -50,6 +50,10 @@ interface Group {
               <h2 [id]="'g-' + g.key">{{ g.title }}</h2>
               <span class="count">{{ g.items.length }}</span>
               <span class="muted small">{{ g.hint }}</span>
+              @if (g.key === 'android' || g.key === 'ios') {
+                <span class="spacer"></span>
+                <a class="btn small-btn" routerLink="../session">Start test session</a>
+              }
             </div>
             <ul class="items card">
               @for (i of g.items; track i.testCase.number) {
@@ -89,6 +93,7 @@ interface Group {
     .t { font-weight: 500; }
     .num { min-width: 32px; }
     .meta { display: flex; align-items: center; gap: 8px; }
+    .small-btn { height: 28px; font-size: 13px; }
   `,
 })
 export class InboxPage {
@@ -100,8 +105,8 @@ export class InboxPage {
     const g = this.inbox.groups();
     return [
       { key: 'review', title: 'To review', hint: 'Approve or request changes', items: g.review, target: 'review' },
-      { key: 'android', title: 'To run on Android', hint: 'Recording runs arrives in M4', items: g.run.android, target: 'case' },
-      { key: 'ios', title: 'To run on iOS', hint: 'Recording runs arrives in M4', items: g.run.ios, target: 'case' },
+      { key: 'android', title: 'To run on Android', hint: 'Run them on a test device and record the results', items: g.run.android, target: 'case' },
+      { key: 'ios', title: 'To run on iOS', hint: 'Run them on a test device and record the results', items: g.run.ios, target: 'case' },
       { key: 'changes', title: 'Changes requested on your cases', hint: 'Edit, then resubmit', items: g.changes, target: 'case' },
       { key: 'drafts', title: 'Your drafts', hint: 'Not yet submitted for review', items: g.drafts, target: 'case' },
     ];

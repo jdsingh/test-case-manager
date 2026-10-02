@@ -472,3 +472,20 @@ export async function searchAssignedCases(
     .map(({ projectItems, ...issue }) => ({ issue, projects: projectItems.nodes.map((p) => p.project) }));
   return { total: data.search.issueCount, items };
 }
+
+/** A repo's id and its "bug" label, for filing bugs from failed runs (EX-6). */
+export async function fetchBugTarget(
+  gh: GitHubClient,
+  owner: string,
+  name: string,
+): Promise<{ id: string; bugLabelId: string | null }> {
+  const data = await gh.graphql<{ repository: { id: string; labels: { nodes: { id: string; name: string }[] } } | null }>(
+    `query($owner: String!, $name: String!) {
+      repository(owner: $owner, name: $name) { id labels(first: 10, query: "bug") { nodes { id name } } }
+    }`,
+    { owner, name },
+  );
+  if (!data.repository) throw new GitHubError('not_found', `Repository ${owner}/${name} was not found.`);
+  const bug = data.repository.labels.nodes.find((l) => l.name.toLowerCase() === 'bug');
+  return { id: data.repository.id, bugLabelId: bug?.id ?? null };
+}

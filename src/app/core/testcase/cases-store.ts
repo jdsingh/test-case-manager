@@ -11,6 +11,7 @@ import {
   createLabel,
   fetchIssue,
   fetchProjectIssues,
+  fetchBugTarget,
   fetchUserIds,
   reopenIssue,
   updateIssue,
@@ -31,7 +32,9 @@ import {
   renderBody,
 } from './model';
 import { closeComment, editComment, lineComment, reviewComment, submitComment } from './comments';
-import { Decision, LineNote } from './review';
+import { Decision, LineNote, historyOf } from './review';
+import { BugLink, RunEvent, RunMeta, bugComment, canRun, latestRuns, runComment, runLabels, runsOf, statusFromRuns } from './runs';
+import { EvidenceRef, UploadFile, uploadEvidence } from '../evidence/evidence';
 
 export type CasesLoad = { status: 'idle' | 'loading' | 'ready' } | { status: 'error'; error: GitHubError };
 
@@ -192,7 +195,9 @@ export class CasesStore {
       id: tc.id,
       title: issueTitle(draft.title),
       body: renderBody(draft, tc.extraBody),
-      labelIds: await this.labelIds(labelsFor(tc.labels, { ...draft, status, regression: tc.regression })),
+      labelIds: await this.labelIds(
+        labelsFor(tc.labels, { ...draft, status, regression: tc.regression, ...(backToReview ? { runLabels: [] } : {}) }),
+      ),
       ...(backToReview ? { assigneeIds: await this.idsFor(reviewers) } : {}),
     });
     if (tc.status !== 'draft') {
@@ -297,6 +302,112 @@ export class CasesStore {
       if (!includesLogin(chosen, ranked[0])) chosen.push(ranked[0]);
     }
     return chosen;
+  }
+
+  // ---- runs (5.5) ---------------------------------------------------------------
+
+  /**
+   * Records a run (EX-1 to EX-5): uploads evidence, posts the run comment, then works out
+   * each platform's result on the target version and updates status, run labels and the
+   * runners (whoever passed a platform is unassigned from it, 5.3a).
+   */
+  async recordRun(
+    tc: TestCase,
+    meta: RunMeta,
+    notes: string,
+    files: UploadFile[],
+    onProgress: (stage: string) => void = () => {},
+  ): Promise<{ testCase: TestCase; run: RunEvent | null }> {
+    if (!canRun(tc)) throw new GitHubError('conflict', 'Only approved test cases can be run.');
+    const repo = this.requireRepo();
+    const gh = this.session.requireClient();
+    let evidence: EvidenceRef[] = [];
+    if (files.length) {
+      onProgress(`Uploading evidence (0/${files.length})…`);
+      evidence = await uploadEvidence(
+        gh,
+        repo.nameWithOwner,
+        files,
+        `Evidence for #${tc.number} on ${meta.platform}`,
+        (done, total) => onProgress(`Uploading evidence (${done}/${total})…`),
+      );
+    }
+    onProgress('Saving the run…');
+    const posted = await addComment(gh, tc.id, runComment(repo.nameWithOwner, meta, notes, evidence));
+    return { testCase: await this.syncRunState(tc, meta), run: runsOf([posted])[0] ?? null };
+  }
+
+  /** Recomputes status, run labels and runners from the case's comments. */
+  async syncRunState(tc: TestCase, lastRun?: RunMeta): Promise<TestCase> {
+    const repo = this.requireRepo();
+    const gh = this.session.requireClient();
+    const { comments } = await fetchIssue(gh, repo.owner, repo.name, tc.number);
+    const since = historyOf(comments).versionStart;
+    const target = this.features.settings()?.targetVersion ?? null;
+    const latest = latestRuns(runsOf(comments), tc.platforms, target, since);
+    const status = statusFromRuns(tc.platforms, latest);
+    const config = this.ws.config();
+    const me = this.requireMe();
+
+    // Runners: one per platform still to pass; nobody for platforms that passed.
+    const assignees: string[] = [];
+    for (const p of tc.platforms) {
+      if (latest[p]?.result === 'pass') continue;
+      const onPlatform = (l: string) => !!config && includesLogin(config.team[p], l);
+      const current = tc.assignees.map((a) => a.login).find(onPlatform);
+      // Whoever just ran it and didn't pass takes the slot (AS-3).
+      const runner = lastRun?.platform === p && lastRun.result !== 'pass' && onPlatform(me) ? me : current;
+      if (runner && !includesLogin(assignees, runner)) assignees.push(runner);
+    }
+    const issue = await updateIssue(gh, {
+      id: tc.id,
+      labelIds: await this.labelIds(
+        labelsFor(tc.labels, {
+          priority: tc.priority ?? 'P2',
+          platforms: tc.platforms,
+          status,
+          regression: tc.regression,
+          runLabels: runLabels(latest),
+        }),
+      ),
+      assigneeIds: await this.idsFor(assignees),
+    });
+    return this.upsert(fromIssue(issue));
+  }
+
+  /** EX-6: files a bug for a failed run in bugs.repo (or the testbank repo) and links it. */
+  async fileBug(tc: TestCase, platform: Platform | null, title: string, body: string): Promise<BugLink> {
+    const repo = this.requireRepo();
+    const gh = this.session.requireClient();
+    const target = this.ws.config()?.bugs.repo ?? repo.nameWithOwner;
+    const [owner, name] = target.split('/');
+    const { id, bugLabelId } = await fetchBugTarget(gh, owner, name);
+    const issue = await createIssue(gh, {
+      repositoryId: id,
+      title,
+      body,
+      labelIds: bugLabelId ? [bugLabelId] : [],
+      assigneeIds: [],
+    });
+    const link: BugLink = { platform, issue: `${target}#${issue.number}`, url: issue.url };
+    await addComment(gh, tc.id, bugComment(link));
+    this.writes.update((n) => n + 1);
+    return link;
+  }
+
+  /** AS-5: one Android and one iOS runner for many approved cases at once. */
+  async assignRunners(
+    cases: TestCase[],
+    picks: Partial<Record<Platform, string>>,
+    progress: (done: number) => void = () => {},
+  ): Promise<void> {
+    for (const [i, tc] of cases.entries()) {
+      const logins = tc.platforms
+        .map((p) => picks[p] ?? tc.assignees.map((a) => a.login).find((l) => includesLogin(this.ws.config()?.team[p] ?? [], l)))
+        .filter((l): l is string => !!l);
+      await this.assign(tc, logins.filter((l, j) => logins.findIndex((x) => sameLogin(x, l)) === j));
+      progress(i + 1);
+    }
   }
 
   // ---- reviewers (5.3a) ------------------------------------------------------------

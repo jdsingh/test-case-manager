@@ -46,6 +46,7 @@ async function shows(l: Locator): Promise<boolean> {
 
 const browser = await chromium.launch();
 let current: Page | null = null;
+let expect422 = false;
 
 async function newPage(gh: MockGitHub): Promise<Page> {
   const ctx = await browser.newContext({ viewport: { width: 1200, height: 860 } });
@@ -53,6 +54,8 @@ async function newPage(gh: MockGitHub): Promise<Page> {
   page.on('console', (m) => {
     // The bad-token step makes one expected 401.
     if (/status of 401/.test(m.text())) return;
+    // The M4 section simulates a concurrent evidence push once (an expected 422).
+    if (/status of 422/.test(m.text()) && expect422) return;
     if (m.type() === 'error' || /Content Security Policy/i.test(m.text())) {
       failures++;
       console.log(`  ✗ console ${m.type()}: ${m.text()}`);
@@ -541,6 +544,125 @@ Scenario: Order history shows the new order
     await page.waitForTimeout(300);
     check(gh.issue(1).assignees.join() === 'sam-android,jo-ios', 'runner reassigned per platform (AS-2)');
     check(await shows(page.getByText('earlier version').or(page.getByText('Approved for Android'))), 'review history shown');
+    await page.context().close();
+  }
+
+  // 9. M4: runs, evidence, test session, bugs, bulk assign.
+  console.log('Runs and evidence (M4)');
+  {
+    const { renderBody } = await import('../src/app/core/testcase/model');
+    const { submitComment, reviewComment, parseMarker } = await import('../src/app/core/testcase/comments');
+    const gh = new MockGitHub();
+    gh.labels = [...(await import('../src/app/core/config/labels')).LABELS.map((l) => l.name), 'bug'];
+    gh.configText = JSON.stringify({
+      version: 1,
+      team: { pm: ['priya-pm'], techLead: ['alex-lead'], android: ['lee-android', 'sam-android'], ios: ['jo-ios'] },
+      features: { '7': { targetVersion: '4.12.0' } },
+    });
+    const body = (title: string, platforms: ('android' | 'ios')[]) =>
+      renderBody({
+        title, priority: 'P0', platforms, preconditions: 'Card 4242 saved',
+        steps: [
+          { keyword: 'Given', text: 'a guest with one item in the cart' },
+          { keyword: 'When', text: 'they pay with the saved card' },
+          { keyword: 'Then', text: 'the confirmation shows an order number' },
+        ],
+      });
+    const labels = (status: string, platforms: string[]) => ['testcase', 'priority:P0', `status:${status}`, ...platforms.map((p) => `platform:${p}`)];
+    const reviewed = (who: string) => [
+      { id: `s-${who}`, body: submitComment([who], false), createdAt: '2026-10-01T08:00:00Z', author: 'priya-pm' },
+      { id: `a-${who}`, body: reviewComment('android', 'approve', ''), createdAt: '2026-10-01T08:30:00Z', author: who },
+    ];
+    gh.addIssue({ title: '[TC] Guest checkout', body: body('Guest checkout', ['android', 'ios']), labels: labels('approved', ['android', 'ios']), assignees: ['lee-android', 'jo-ios'], comments: reviewed('sam-android') });
+    gh.addIssue({ title: '[TC] Google Pay', body: body('Google Pay', ['android']), labels: labels('approved', ['android']), assignees: ['lee-android'], comments: reviewed('sam-android') });
+    gh.addIssue({ title: '[TC] Back keeps the cart', body: body('Back keeps the cart', ['android']), labels: labels('approved', ['android']), assignees: ['sam-android'], comments: reviewed('lee-android') });
+    gh.addIssue({ title: '[TC] Still in review', body: body('Still in review', ['android']), labels: labels('in-review', ['android']), assignees: ['sam-android'] });
+
+    const png = Buffer.from(await Bun.file(join(SHOTS, '1-connect.png')).arrayBuffer());
+    let page = await newPage(gh);
+    await page.goto(`${BASE}/connect`);
+    await connect(page, 'tok-lee-android');
+    await page.waitForURL(/\/repos/);
+
+    // Run form on the case page (EX-1 to EX-5).
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/4`);
+    await page.getByText('Runs can be recorded once the case is approved.').waitFor();
+    check(true, 'no runs before approval (EX-7)');
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/1`);
+    await page.getByRole('button', { name: 'Record a run' }).click();
+    check((await page.getByLabel('App version').inputValue()) === '4.12.0', 'version prefilled with the target');
+    await page.getByLabel('Build number').fill('41207');
+    await page.getByLabel('Device').fill('Pixel 8');
+    await page.getByLabel('OS version').fill('Android 15');
+    await page.locator('app-run-form input[type=file]').setInputFiles({ name: 'confirmation.png', mimeType: 'image/png', buffer: png });
+    check(await shows(page.locator('.chosen li', { hasText: 'confirmation.png' })), 'evidence attached with a preview');
+    gh.raceOnce = true; // someone else pushes evidence at the same moment
+    expect422 = true;
+    await page.getByRole('button', { name: 'Record passed run' }).click();
+    await page.locator('.result.res-pass').waitFor({ timeout: 15000 });
+    const i1 = gh.issue(1);
+    const run = parseMarker(i1.comments.at(-1)!.body);
+    const path = (run?.data['evidence'] as { path: string }[])[0]?.path ?? '';
+    check(run?.kind === 'run' && run.data['device'] === 'Pixel 8' && run.data['build'] === '41207', 'run comment with metadata');
+    check(/^evidence\/1\/\d{8}T\d{6}Z-android-1\.png$/.test(path) && gh.evidence.get(path)?.length === png.length, 'evidence on the tcm-evidence branch, after a retry');
+    check(gh.evidenceCommits[0].parents.length === 0, 'evidence branch starts as an orphan');
+    check(i1.comments.at(-1)!.body.includes('blob/tcm-evidence/evidence/1/'), 'evidence embedded in the comment for GitHub');
+    check(i1.labels.includes('run:android:passed') && i1.labels.includes('status:approved'), 'Android passed; still approved until iOS runs');
+    check(i1.assignees.join() === 'jo-ios', 'the Android runner is unassigned after passing (5.3a)');
+    check(await shows(page.locator('app-evidence-thumb img[src^="blob:"]')), 'evidence thumbnail loads through the API');
+    await page.screenshot({ path: join(SHOTS, '17-case-runs.png'), fullPage: true });
+
+    // Test session (TS-1 to TS-7).
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases`);
+    await page.getByRole('link', { name: 'Start test session' }).click();
+    await page.waitForURL(/\/session/);
+    check((await page.getByLabel('Device').inputValue()) === 'Pixel 8', 'session remembers the device (TS-4)');
+    check(await shows(page.getByText('1 case to run on Android')), 'only my runnable cases; passed ones left out');
+    await page.getByLabel('Also include cases assigned to other engineers').check();
+    check(await shows(page.getByText('2 cases to run on Android')), 'can widen to others');
+    await page.getByRole('button', { name: 'Start session' }).click();
+    await page.getByRole('heading', { name: 'Google Pay' }).waitFor();
+    await page.locator('h1').click();
+    await page.keyboard.press(' ');
+    check(await shows(page.locator('.steps li.done')), 'Space ticks the next step');
+    await page.screenshot({ path: join(SHOTS, '18-session.png'), fullPage: true });
+    await page.keyboard.press('p');
+    await page.getByRole('heading', { name: 'Back keeps the cart' }).waitFor();
+    check(true, 'P records a pass and moves on');
+    await page.keyboard.press('f');
+    check(await shows(page.getByText('Add a note saying why it failed')), 'Fail needs a note');
+    await page.getByPlaceholder(/Anything worth knowing/).fill('Back returns to the home screen; cart is empty.');
+    await page.locator('h1').click();
+    await page.keyboard.press('f');
+    await page.getByText('File a bug for this failure?').waitFor();
+    check((await page.getByLabel('Bug title').inputValue()) === '[Android] Back keeps the cart fails', 'bug prefilled (TS-6)');
+    check((await page.getByLabel('Bug description').inputValue()).includes('cart is empty'), 'bug includes the notes');
+    await page.getByRole('button', { name: 'File bug' }).click();
+    await page.getByRole('heading', { name: 'All done' }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('.bar .spinner'), undefined, { timeout: 20000 });
+    const bug = gh.issues.find((i) => i.title === '[Android] Back keeps the cart fails');
+    check(!!bug && bug.labels.includes('bug'), 'bug filed with the bug label');
+    check(gh.issue(3).comments.some((c) => c.body.startsWith('<!-- tcm:bug')), 'bug linked from the test case');
+    check(gh.issue(2).labels.includes('status:passed') && gh.issue(2).assignees.length === 0, 'single-platform pass → Passed, nobody left assigned');
+    check(gh.issue(3).labels.includes('status:failed') && gh.issue(3).labels.includes('run:android:failed'), 'fail → Failed');
+    check(gh.issue(3).assignees.join() === 'lee-android', 'whoever ran the failing case takes the slot (AS-3)');
+    await page.context().close();
+
+    // Bulk-assign runners as the PM (AS-5).
+    page = await newPage(gh);
+    page.on('dialog', (d) => void d.accept());
+    await page.goto(`${BASE}/connect`);
+    await connect(page, 'tok-priya-pm');
+    await page.waitForURL(/\/repos/);
+    await page.goto(`${BASE}/r/acme/shop-app-testbank/cases`);
+    await page.locator('table.cases tbody tr').first().waitFor();
+    await page.getByLabel('Select all runnable cases').check();
+    check(await shows(page.getByText('3 selected')), 'only runnable cases selectable');
+    await page.getByLabel('Android runner').selectOption('sam-android');
+    await page.getByRole('button', { name: 'Apply' }).click();
+    await page.getByRole('region', { name: 'Bulk actions' }).waitFor({ state: 'hidden' });
+    check(gh.issue(1).assignees.join() === 'sam-android,jo-ios' && gh.issue(3).assignees.join() === 'sam-android', 'runners assigned per platform in bulk');
+    check(gh.issue(4).assignees.join() === 'sam-android', 'in-review case untouched');
     await page.context().close();
   }
 } catch (e) {

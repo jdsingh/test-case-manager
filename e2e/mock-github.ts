@@ -44,6 +44,15 @@ export class MockGitHub {
   pullRequests: { branch: string; title: string }[] = [];
   private commitSeq = 0;
   issues: MockIssue[] = [];
+  /** Evidence branch: path → bytes, plus a simple commit chain. */
+  evidence = new Map<string, Buffer>();
+  evidenceHead: string | null = null;
+  evidenceCommits: { sha: string; parents: string[]; message: string }[] = [];
+  /** Make the next ref update fail as if someone else pushed first. */
+  raceOnce = false;
+  private blobs = new Map<string, Buffer>();
+  private trees = new Map<string, Map<string, string>>();
+  private gitSeq = 0;
   private issueSeq = 0;
   private clock = Date.parse('2026-10-01T10:00:00Z');
   viewerLogin = '';
@@ -135,12 +144,76 @@ export class MockGitHub {
     );
   }
 
+  private async handleRest(route: Route, method: string, url: URL, body: any): Promise<void> {
+    const base = `/repos/${this.owner}/${this.name}`;
+    const path = url.pathname;
+    const sha = () => `g${++this.gitSeq}`;
+    if (!path.startsWith(base)) return json(route, 404, { message: 'Not Found' });
+    const rest = path.slice(base.length);
+    if (method === 'GET' && rest === '/git/ref/heads/tcm-evidence') {
+      return this.evidenceHead ? json(route, 200, { object: { sha: this.evidenceHead } }) : json(route, 404, { message: 'Not Found' });
+    }
+    if (method === 'POST' && rest === '/git/blobs') {
+      const id = sha();
+      this.blobs.set(id, Buffer.from(body.content, body.encoding === 'base64' ? 'base64' : 'utf8'));
+      return json(route, 201, { sha: id });
+    }
+    if (method === 'POST' && rest === '/git/trees') {
+      const id = sha();
+      const tree = new Map(body.base_tree ? this.trees.get(body.base_tree) : []);
+      for (const e of body.tree) tree.set(e.path, e.sha);
+      this.trees.set(id, tree);
+      return json(route, 201, { sha: id });
+    }
+    if (method === 'POST' && rest === '/git/commits') {
+      const id = sha();
+      this.evidenceCommits.push({ sha: id, parents: body.parents, message: body.message });
+      this.commitTrees.set(id, body.tree);
+      return json(route, 201, { sha: id, tree: { sha: body.tree } });
+    }
+    const commitMatch = /^\/git\/commits\/(\w+)$/.exec(rest);
+    if (method === 'GET' && commitMatch) {
+      return json(route, 200, { sha: commitMatch[1], tree: { sha: this.commitTrees.get(commitMatch[1]) } });
+    }
+    if (method === 'POST' && rest === '/git/refs') {
+      if (this.evidenceHead) return json(route, 422, { message: 'Reference already exists' });
+      this.setHead(body.sha);
+      return json(route, 201, { object: { sha: body.sha } });
+    }
+    if (method === 'PATCH' && rest === '/git/refs/heads/tcm-evidence') {
+      if (this.raceOnce) {
+        this.raceOnce = false;
+        return json(route, 422, { message: 'Update is not a fast forward' });
+      }
+      const parent = this.evidenceCommits.find((c) => c.sha === body.sha)?.parents[0];
+      if (parent !== this.evidenceHead) return json(route, 422, { message: 'Update is not a fast forward' });
+      this.setHead(body.sha);
+      return json(route, 200, { object: { sha: body.sha } });
+    }
+    if (method === 'GET' && rest.startsWith('/contents/') && url.searchParams.get('ref') === 'tcm-evidence') {
+      const file = this.evidence.get(decodeURIComponent(rest.slice('/contents/'.length)));
+      if (!file) return json(route, 404, { message: 'Not Found' });
+      return route.fulfill({ status: 200, headers: cors(), contentType: 'application/octet-stream', body: file });
+    }
+    return json(route, 404, { message: `mock-github: unhandled REST ${method} ${rest}` });
+  }
+
+  private commitTrees = new Map<string, string>();
+
+  private setHead(commit: string): void {
+    this.evidenceHead = commit;
+    const tree = this.trees.get(this.commitTrees.get(commit) ?? '') ?? new Map<string, string>();
+    this.evidence = new Map([...tree].map(([p, blob]) => [p, this.blobs.get(blob)!]));
+  }
+
   private async handle(route: Route): Promise<void> {
     const req = route.request();
     if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors() });
     const token = (req.headers()['authorization'] ?? '').replace(/^bearer /i, '');
     const viewer = this.tokens.get(token);
     if (!viewer) return json(route, 401, { message: 'Bad credentials' });
+    const url = new URL(req.url());
+    if (url.pathname !== '/graphql') return this.handleRest(route, req.method(), url, req.postDataJSON());
     const { query, variables } = req.postDataJSON() as { query: string; variables: Record<string, any> };
     const v = variables ?? {};
     const ok = (data: unknown) => json(route, 200, { data }, { 'X-OAuth-Scopes': 'repo, project' });
@@ -235,6 +308,13 @@ export class MockGitHub {
           },
         },
       });
+    }
+    if (query.includes('ref(qualifiedName: $ref)')) {
+      return ok({ repository: { ref: this.evidenceHead ? { id: 'REF1' } : null } });
+    }
+    if (query.includes('labels(first: 10, query: "bug")')) {
+      const nodes = this.labels.filter((l) => l === 'bug').map((name) => ({ id: this.labelId(name), name }));
+      return ok({ repository: { id: 'R1', labels: { nodes } } });
     }
     if (query.includes('createLabel')) {
       this.labels.push(v['input'].name);

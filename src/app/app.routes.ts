@@ -12,6 +12,7 @@ import { CaseEditorPage } from './features/cases/case-editor.page';
 import { ImportPage } from './features/cases/import.page';
 import { InboxPage } from './features/inbox/inbox.page';
 import { ReviewPage } from './features/review/review.page';
+import { SessionPage } from './features/runs/session.page';
 
 const leaveEditorGuard = (c: CaseEditorPage) => c.canLeave();
 
@@ -51,6 +52,7 @@ export const routes: Routes = [
       },
       { path: 'inbox', component: InboxPage, title: 'Inbox · Test Case Manager' },
       { path: 'review', component: ReviewPage, title: 'Review · Test Case Manager' },
+      { path: 'session', component: SessionPage, title: 'Test session · Test Case Manager' },
       {
         path: 'dashboard',
         component: ComingSoonPage,

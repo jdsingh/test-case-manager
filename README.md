@@ -32,7 +32,16 @@ Milestone **M3 (review)** is built:
 - Assignees follow the stage: reviewers while in review, one runner per platform once approved (fewest open cases first), the author on a change request; editable per platform
 - Inbox of everything assigned to you across features, with the count in the nav, the tab title and the favicon
 
-Still to come: execution and evidence (M4), the dashboard (M5), the regression bank and Claude Code skill (M6).
+Milestone **M4 (execution and evidence)** is built:
+
+- Record a run on the case page: result, app version, build, device, OS, environment, time, notes and evidence; details are remembered per platform
+- Evidence (images, videos; HEIC converted where the browser can) is committed to the orphan `tcm-evidence` branch and embedded in the run comment; the app shows it through the API, so private repos work
+- The latest run per platform on the feature's target version decides the result; status, `run:*` labels and runners follow (whoever passes a platform is unassigned)
+- A failed run offers a prefilled bug, filed in `bugs.repo` (or the testbank repo) and linked from the case
+- Test session mode for laptops: large tickable steps, `P`/`F`/`B` to record, `J`/`K` to move, `Space` to tick, drag/paste/watched-folder evidence, background uploads
+- Bulk-assign Android and iOS runners from the list
+
+Still to come: the dashboard (M5), the regression bank and Claude Code skill (M6).
 
 ## Develop
 

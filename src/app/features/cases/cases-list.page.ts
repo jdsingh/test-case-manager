@@ -1,8 +1,9 @@
-import { Component, ElementRef, HostListener, computed, inject, viewChild } from '@angular/core';
+import { Component, ElementRef, HostListener, computed, inject, signal, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
-import { Workspace } from '../../core/workspace';
+import { Workspace, asGitHubError } from '../../core/workspace';
+import { canRun } from '../../core/testcase/runs';
 import { FeatureSelection } from '../../core/feature-selection';
 import { CasesStore } from '../../core/testcase/cases-store';
 import { PRIORITIES, Platform, Priority } from '../../core/config/team-config';
@@ -40,6 +41,9 @@ interface Filters {
         <span class="spacer"></span>
         @if (features.project() && store.cases().length) {
           <button class="btn" type="button" (click)="exportCsv()" title="Download the cases shown below as CSV">Export CSV</button>
+        }
+        @if (ws.canWriteRepo() && features.project() && isEngineer()) {
+          <a class="btn" routerLink="../session" queryParamsHandling="preserve">Start test session</a>
         }
         @if (ws.canWriteRepo() && features.project()) {
           <a class="btn" routerLink="import" queryParamsHandling="preserve">Import</a>
@@ -138,9 +142,38 @@ interface Filters {
                 <button class="btn btn-link" type="button" (click)="clear()">Clear filters</button>
               </p>
             } @else {
+              @if (selected().size) {
+                <div class="bulk card row" role="region" aria-label="Bulk actions">
+                  <strong>{{ selected().size }} selected</strong>
+                  <span class="muted small">Assign runners:</span>
+                  @for (p of bulkPlatforms; track p.id) {
+                    <label class="row small">
+                      {{ p.name }}
+                      <select (change)="setBulk(p.id, $any($event.target).value)" [attr.aria-label]="p.name + ' runner'">
+                        <option value="">Keep current</option>
+                        @for (login of team(p.id); track login) {
+                          <option [value]="login">{{ login }}</option>
+                        }
+                      </select>
+                    </label>
+                  }
+                  <button class="btn btn-primary" type="button" (click)="applyBulk()" [disabled]="bulkBusy() || !hasBulkPick()">
+                    @if (bulkBusy()) { <span class="spinner" aria-hidden="true"></span> {{ bulkDone() }}/{{ selected().size }} } @else { Apply }
+                  </button>
+                  <button class="btn btn-link small" type="button" (click)="clearSelection()">Clear</button>
+                </div>
+              }
+              @if (bulkError()) {
+                <div class="banner banner-bad" role="alert">{{ bulkError() }}</div>
+              }
               <table class="cases card">
                 <thead>
                   <tr>
+                    @if (canBulk()) {
+                      <th scope="col" class="sel">
+                        <input type="checkbox" aria-label="Select all runnable cases" [checked]="allSelected()" (change)="toggleAll()" />
+                      </th>
+                    }
                     <th scope="col" class="num">#</th>
                     <th scope="col">Test case</th>
                     <th scope="col">Priority</th>
@@ -153,6 +186,13 @@ interface Filters {
                 <tbody>
                   @for (tc of shown(); track tc.number) {
                     <tr>
+                      @if (canBulk()) {
+                        <td class="sel">
+                          @if (runnable(tc)) {
+                            <input type="checkbox" [attr.aria-label]="'Select #' + tc.number" [checked]="selected().has(tc.number)" (change)="toggleSelect(tc.number)" />
+                          }
+                        </td>
+                      }
                       <td class="num muted">{{ tc.number }}</td>
                       <td>
                         <a class="title" [routerLink]="[tc.number]" queryParamsHandling="preserve">{{ tc.title }}</a>
@@ -197,6 +237,9 @@ interface Filters {
     .cases tr:last-child td { border-bottom: none; }
     .cases tbody tr:hover { background: var(--surface-2); }
     .num { width: 44px; }
+    .sel { width: 32px; }
+    .bulk { flex-wrap: wrap; gap: 12px; padding: 10px 14px; border-color: var(--accent); }
+    .bulk select { width: auto; height: 30px; }
     .upd { white-space: nowrap; }
     .title { color: var(--text); font-weight: 500; text-decoration: none; margin-right: 6px; }
     .title:hover { color: var(--accent); text-decoration: underline; }
@@ -256,6 +299,65 @@ export class CasesListPage {
       (c) => c.count > 0 || c.status === this.filters().status,
     ),
   );
+
+  // ---- bulk runner assignment (AS-5) ----
+  protected readonly selected = signal<Set<number>>(new Set());
+  private readonly bulkPick = signal<Partial<Record<Platform, string>>>({});
+  protected readonly bulkBusy = signal(false);
+  protected readonly bulkDone = signal(0);
+  protected readonly bulkError = signal<string | null>(null);
+  protected readonly bulkPlatforms: { id: Platform; name: string }[] = [
+    { id: 'android', name: 'Android' },
+    { id: 'ios', name: 'iOS' },
+  ];
+  protected readonly canBulk = computed(() => this.ws.canWriteRepo() && !this.ws.isViewerOnly());
+  protected readonly runnable = (tc: TestCase) => canRun(tc);
+  protected readonly allSelected = computed(() => {
+    const r = this.shown().filter(canRun);
+    return r.length > 0 && r.every((c) => this.selected().has(c.number));
+  });
+  protected readonly hasBulkPick = computed(() => Object.values(this.bulkPick()).some(Boolean));
+  protected clearSelection(): void {
+    this.selected.set(new Set());
+  }
+
+  protected team(p: Platform): string[] {
+    return this.ws.config()?.team[p] ?? [];
+  }
+
+  protected toggleSelect(n: number): void {
+    this.selected.update((s) => {
+      const next = new Set(s);
+      if (next.has(n)) next.delete(n);
+      else next.add(n);
+      return next;
+    });
+  }
+
+  protected toggleAll(): void {
+    this.selected.set(this.allSelected() ? new Set() : new Set(this.shown().filter(canRun).map((c) => c.number)));
+  }
+
+  protected setBulk(p: Platform, login: string): void {
+    this.bulkPick.update((b) => ({ ...b, [p]: login || undefined }));
+  }
+
+  protected async applyBulk(): Promise<void> {
+    const cases = [...this.selected()].map((n) => this.store.byNumber(n)).filter((c): c is TestCase => !!c);
+    this.bulkBusy.set(true);
+    this.bulkDone.set(0);
+    this.bulkError.set(null);
+    try {
+      await this.store.assignRunners(cases, this.bulkPick(), (d) => this.bulkDone.set(d));
+      this.selected.set(new Set());
+    } catch (e) {
+      this.bulkError.set(`Stopped after ${this.bulkDone()} of ${cases.length}: ${asGitHubError(e).message}`);
+    } finally {
+      this.bulkBusy.set(false);
+    }
+  }
+
+  protected readonly isEngineer = computed(() => this.ws.roles().includes('android') || this.ws.roles().includes('ios'));
 
   protected readonly loadError = computed(() => {
     const l = this.store.load();

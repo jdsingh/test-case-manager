@@ -23,6 +23,7 @@ const config: TeamConfig = {
   features: {},
   readiness: { blockingPriorities: ['P0'] },
   assignment: { defaultReviewer: {} },
+  bugs: { repo: null },
 };
 
 function tcWith(status: string, platforms: ('android' | 'ios')[] = ['android', 'ios']) {

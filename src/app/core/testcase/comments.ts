@@ -4,14 +4,14 @@
 import { Platform } from '../config/team-config';
 import { PLATFORM_NAMES } from './model';
 
-export type TcmKind = 'review' | 'run' | 'submit' | 'edit' | 'close' | 'line' | 'assign';
+export type TcmKind = 'review' | 'run' | 'submit' | 'edit' | 'close' | 'line' | 'assign' | 'bug';
 
 export interface TcmMarker {
   kind: TcmKind;
   data: Record<string, unknown>;
 }
 
-const MARKER_RE = /^\s*<!--\s*tcm:(review|run|submit|edit|close|line|assign)\s*(\{[\s\S]*?\})?\s*-->/;
+const MARKER_RE = /^\s*<!--\s*tcm:(review|run|submit|edit|close|line|assign|bug)\s*(\{[\s\S]*?\})?\s*-->/;
 
 export function parseMarker(body: string): TcmMarker | null {
   const m = MARKER_RE.exec(body);

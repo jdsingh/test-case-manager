@@ -176,10 +176,19 @@ export function fromIssue(issue: IssueNode): TestCase {
  */
 export function labelsFor(
   existing: string[],
-  state: { priority: Priority; platforms: Platform[]; status: Status; regression: boolean },
+  state: {
+    priority: Priority;
+    platforms: Platform[];
+    status: Status;
+    regression: boolean;
+    /** When given, replaces the run:<platform>:<result> labels; otherwise they're kept. */
+    runLabels?: string[];
+  },
 ): string[] {
   const ours = (l: string) =>
-    /^(priority|platform|status):/i.test(l) || [TESTCASE_LABEL, REGRESSION_LABEL].includes(l.toLowerCase());
+    /^(priority|platform|status):/i.test(l) ||
+    [TESTCASE_LABEL, REGRESSION_LABEL].includes(l.toLowerCase()) ||
+    (state.runLabels !== undefined && /^run:/i.test(l));
   const kept = existing.filter((l) => !ours(l));
   return [
     TESTCASE_LABEL,
@@ -187,6 +196,7 @@ export function labelsFor(
     ...state.platforms.map((p) => `platform:${p}`),
     `status:${state.status}`,
     ...(state.regression ? [REGRESSION_LABEL] : []),
+    ...(state.runLabels ?? []),
     ...kept,
   ];
 }
