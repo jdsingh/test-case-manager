@@ -665,6 +665,80 @@ Scenario: Order history shows the new order
     check(gh.issue(4).assignees.join() === 'sam-android', 'in-review case untouched');
     await page.context().close();
   }
+
+  // 10. M5: dashboard.
+  console.log('Dashboard (M5)');
+  {
+    const { renderBody } = await import('../src/app/core/testcase/model');
+    const { runComment, bugComment } = await import('../src/app/core/testcase/runs');
+    const gh = new MockGitHub();
+    gh.labels = (await import('../src/app/core/config/labels')).LABELS.map((l) => l.name);
+    const daysAgo = (n: number) => new Date(Date.now() - n * 864e5).toISOString();
+    const release = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10);
+    gh.configText = JSON.stringify({
+      version: 1,
+      team: { pm: ['priya-pm'], techLead: ['alex-lead'], android: ['sam-android'], ios: ['jo-ios'] },
+      features: { '7': { targetVersion: '4.12.0', releaseDate: release } },
+    });
+    const mk = (title: string, priority: string, status: string, platforms: ('android' | 'ios')[], runs: string[], comments: { body: string; at: string; who: string }[] = []) =>
+      gh.addIssue({
+        title: `[TC] ${title}`,
+        body: renderBody({ title, priority: priority as 'P0', platforms, preconditions: '', steps: [{ keyword: 'Given', text: 'a' }, { keyword: 'When', text: 'b' }, { keyword: 'Then', text: 'c' }] }),
+        labels: ['testcase', `priority:${priority}`, `status:${status}`, ...platforms.map((p) => `platform:${p}`), ...runs],
+        comments: comments.map((c, i) => ({ id: `d${title}${i}`, body: c.body, createdAt: c.at, author: c.who })),
+      });
+    const run = (platform: 'android' | 'ios', result: 'pass' | 'fail' | 'blocked', at: string, notes = '') =>
+      runComment('acme/shop-app-testbank', { platform, result, appVersion: '4.12.0', build: '41207', device: platform === 'ios' ? 'iPhone 15' : 'Pixel 8', os: '', env: 'staging', executedAt: at }, notes, []);
+    mk('Guest checkout', 'P0', 'passed', ['android', 'ios'], ['run:android:passed', 'run:ios:passed'], [
+      { body: run('android', 'pass', daysAgo(3)), at: daysAgo(3), who: 'sam-android' },
+      { body: run('ios', 'pass', daysAgo(2)), at: daysAgo(2), who: 'jo-ios' },
+    ]);
+    mk('Saved card', 'P0', 'failed', ['android', 'ios'], ['run:android:passed', 'run:ios:failed'], [
+      { body: run('android', 'pass', daysAgo(2)), at: daysAgo(2), who: 'sam-android' },
+      { body: run('ios', 'fail', daysAgo(1), 'Pay button does nothing'), at: daysAgo(1), who: 'jo-ios' },
+      { body: bugComment({ platform: 'ios', issue: 'acme/shop-app#88', url: 'https://github.com/acme/shop-app/issues/88' }), at: daysAgo(1), who: 'jo-ios' },
+    ]);
+    mk('Google Pay', 'P0', 'approved', ['android'], []);
+    mk('Dynamic Type', 'P1', 'blocked', ['ios'], ['run:ios:blocked'], [{ body: run('ios', 'blocked', daysAgo(1), 'Build crashes on launch'), at: daysAgo(1), who: 'jo-ios' }]);
+    mk('Order history', 'P2', 'draft', ['android'], []);
+
+    const page = await newPage(gh);
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.goto(`${BASE}/connect`);
+    await connect(page, 'tok-alex-lead');
+    await page.waitForURL(/\/repos/);
+    await page.goto(`${BASE}/r/acme/shop-app-testbank`);
+    await page.waitForURL(/\/dashboard/);
+    check(await shows(page.getByRole('heading', { name: 'Not ready: 1 P0 failing on iOS, 1 P0 not run.' })), 'one-line verdict (RR-1, DB-3)');
+    check(await shows(page.locator('app-platform-bar', { hasText: 'Android' }).getByText('2 of 3 passed')), 'Android progress (DB-2)');
+    check(await shows(page.locator('app-platform-bar', { hasText: 'iOS' }).getByText('1 of 3 passed')), 'iOS progress');
+    check(await shows(page.locator('app-burndown-chart path.actual')), 'burndown drawn (RR-2)');
+    const svg = page.locator('app-burndown-chart svg');
+    const box = (await svg.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2);
+    check(await shows(page.locator('app-burndown-chart .tip')), 'crosshair readout on hover');
+    check(await shows(page.locator('.problems li', { hasText: 'Saved card' }).getByRole('link', { name: 'acme/shop-app#88' })), 'failing case with its bug (DB-4)');
+    check(await shows(page.locator('.problems li', { hasText: 'Dynamic Type' }).getByText('Build crashes on launch')), 'blocked case with the run note');
+    check(await shows(page.locator('.changes li', { hasText: 'failed on iOS v4.12.0' })), 'what changed (RR-3)');
+    await page.screenshot({ path: join(SHOTS, '19-dashboard.png'), fullPage: true });
+
+    await page.getByRole('button', { name: 'Copy readiness report' }).click();
+    const md = await page.evaluate(() => navigator.clipboard.readText());
+    check(md.includes('**⛔ Not ready: 1 P0 failing on iOS, 1 P0 not run.**') && md.includes('| iOS | 1 | 1 | 1 | 0 |'), 'readiness report copied (RR-4)');
+
+    // Feature settings (DB-5).
+    await page.getByRole('button', { name: 'edit' }).click();
+    await page.getByLabel('Release date').fill('2026-12-01');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await page.getByText('release 2026-12-01').waitFor();
+    check(JSON.parse(gh.configText!).features['7'].releaseDate === '2026-12-01', 'release date saved to the config');
+
+    // A grid cell opens the filtered list (DB-1).
+    await page.locator('.grid-table a.c-failed').first().click();
+    await page.waitForURL(/\/cases\?.*priority=P0.*status=failed|\/cases\?.*status=failed.*priority=P0/);
+    check(await countIs(page.locator('table.cases tbody tr'), 1), 'grid cell opens the filtered list');
+    await page.context().close();
+  }
 } catch (e) {
   failures++;
   console.log(`  ✗ ${(e as Error).message.split('\n')[0]}`);

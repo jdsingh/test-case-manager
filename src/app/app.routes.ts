@@ -1,25 +1,26 @@
 import { Routes } from '@angular/router';
 import { authGuard, repoGuard, roleHomeGuard, setupGuard, startGuard } from './core/guards';
 import { ConnectPage } from './features/onboarding/connect.page';
-import { ReposPage } from './features/onboarding/repos.page';
 import { RepoShell } from './features/shell/repo-shell';
-import { SetupPage } from './features/onboarding/setup.page';
-import { TeamSettingsPage } from './features/team/team-settings.page';
-import { ComingSoonPage } from './features/shell/coming-soon.page';
-import { CasesListPage } from './features/cases/cases-list.page';
-import { CaseDetailPage } from './features/cases/case-detail.page';
-import { CaseEditorPage } from './features/cases/case-editor.page';
-import { ImportPage } from './features/cases/import.page';
-import { InboxPage } from './features/inbox/inbox.page';
-import { ReviewPage } from './features/review/review.page';
-import { SessionPage } from './features/runs/session.page';
 
-const leaveEditorGuard = (c: CaseEditorPage) => c.canLeave();
+/** Pages that can hold unsaved work implement canLeave(). */
+interface Leavable {
+  canLeave(): boolean;
+}
+const confirmLeave = (c: Leavable) => c.canLeave();
 
+const title = (page: string) => `${page} · Test Case Manager`;
+
+// Pages load on first visit, so the first screen only downloads the shell.
 export const routes: Routes = [
   { path: '', pathMatch: 'full', canActivate: [startGuard], children: [] },
-  { path: 'connect', component: ConnectPage, title: 'Connect · Test Case Manager' },
-  { path: 'repos', component: ReposPage, canActivate: [authGuard], title: 'Choose repo · Test Case Manager' },
+  { path: 'connect', component: ConnectPage, title: title('Connect') },
+  {
+    path: 'repos',
+    loadComponent: () => import('./features/onboarding/repos.page').then((m) => m.ReposPage),
+    canActivate: [authGuard],
+    title: title('Choose repo'),
+  },
   {
     path: 'r/:owner/:repo',
     component: RepoShell,
@@ -28,40 +29,63 @@ export const routes: Routes = [
     runGuardsAndResolvers: 'paramsChange',
     children: [
       { path: '', pathMatch: 'full', canActivate: [roleHomeGuard], children: [] },
-      { path: 'setup', component: SetupPage, title: 'Set up · Test Case Manager' },
-      { path: 'settings/team', component: TeamSettingsPage, title: 'Team settings · Test Case Manager' },
-      { path: 'cases', component: CasesListPage, title: 'Test cases · Test Case Manager' },
+      {
+        path: 'setup',
+        loadComponent: () => import('./features/onboarding/setup.page').then((m) => m.SetupPage),
+        title: title('Set up'),
+      },
+      {
+        path: 'settings/team',
+        loadComponent: () => import('./features/team/team-settings.page').then((m) => m.TeamSettingsPage),
+        title: title('Team settings'),
+      },
+      {
+        path: 'cases',
+        loadComponent: () => import('./features/cases/cases-list.page').then((m) => m.CasesListPage),
+        title: title('Test cases'),
+      },
       {
         path: 'cases/new',
-        component: CaseEditorPage,
-        canDeactivate: [leaveEditorGuard],
-        title: 'New test case · Test Case Manager',
+        loadComponent: () => import('./features/cases/case-editor.page').then((m) => m.CaseEditorPage),
+        canDeactivate: [confirmLeave],
+        title: title('New test case'),
       },
       {
         path: 'cases/import',
-        component: ImportPage,
-        canDeactivate: [(c: ImportPage) => c.canLeave()],
-        title: 'Import · Test Case Manager',
+        loadComponent: () => import('./features/cases/import.page').then((m) => m.ImportPage),
+        canDeactivate: [confirmLeave],
+        title: title('Import'),
       },
-      { path: 'cases/:number', component: CaseDetailPage, title: 'Test case · Test Case Manager' },
+      {
+        path: 'cases/:number',
+        loadComponent: () => import('./features/cases/case-detail.page').then((m) => m.CaseDetailPage),
+        title: title('Test case'),
+      },
       {
         path: 'cases/:number/edit',
-        component: CaseEditorPage,
-        canDeactivate: [leaveEditorGuard],
-        title: 'Edit test case · Test Case Manager',
+        loadComponent: () => import('./features/cases/case-editor.page').then((m) => m.CaseEditorPage),
+        canDeactivate: [confirmLeave],
+        title: title('Edit test case'),
       },
-      { path: 'inbox', component: InboxPage, title: 'Inbox · Test Case Manager' },
-      { path: 'review', component: ReviewPage, title: 'Review · Test Case Manager' },
-      { path: 'session', component: SessionPage, title: 'Test session · Test Case Manager' },
+      {
+        path: 'inbox',
+        loadComponent: () => import('./features/inbox/inbox.page').then((m) => m.InboxPage),
+        title: title('Inbox'),
+      },
+      {
+        path: 'review',
+        loadComponent: () => import('./features/review/review.page').then((m) => m.ReviewPage),
+        title: title('Review'),
+      },
+      {
+        path: 'session',
+        loadComponent: () => import('./features/runs/session.page').then((m) => m.SessionPage),
+        title: title('Test session'),
+      },
       {
         path: 'dashboard',
-        component: ComingSoonPage,
-        title: 'Dashboard · Test Case Manager',
-        data: {
-          heading: 'Dashboard',
-          milestone: 'M5',
-          blurb: 'Counts by priority and status, platform progress and the ship-readiness verdict.',
-        },
+        loadComponent: () => import('./features/dashboard/dashboard.page').then((m) => m.DashboardPage),
+        title: title('Dashboard'),
       },
     ],
   },

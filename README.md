@@ -41,7 +41,16 @@ Milestone **M4 (execution and evidence)** is built:
 - Test session mode for laptops: large tickable steps, `P`/`F`/`B` to record, `J`/`K` to move, `Space` to tick, drag/paste/watched-folder evidence, background uploads
 - Bulk-assign Android and iOS runners from the list
 
-Still to come: the dashboard (M5), the regression bank and Claude Code skill (M6).
+Milestone **M5 (dashboard)** is built:
+
+- One-line ship verdict with its reasons, from the configured blocking priorities (default P0) on the feature's target version; other failures shown as warnings
+- Runs per platform (passed / failed / blocked / not run) and a burndown of runs still to do against an even pace to the release date
+- Counts by priority and status; every cell opens the filtered list
+- Failing and blocked cases with the latest run, its evidence and any linked bug
+- What changed since your last visit, and a one-click Markdown readiness report for Slack or a release PR
+- Target version and release date editable on the dashboard (saved to the config)
+
+Still to come: the regression bank and Claude Code skill (M6).
 
 ## Develop
 

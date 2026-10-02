@@ -235,6 +235,19 @@ export class MockGitHub {
         }));
       return ok({ search: { issueCount: nodes.length, nodes } });
     }
+    if (query.includes('items(first: 50') && query.includes('comments(last: 60)')) {
+      const nodes = this.issues
+        .filter((i) => i.projectIds.includes(String(v['id'])))
+        .map((i) => ({
+          content: {
+            __typename: 'Issue',
+            number: i.number,
+            repository: { nameWithOwner: `${this.owner}/${this.name}` },
+            comments: { nodes: i.comments.map((c) => ({ ...c, url: '', author: { login: c.author, avatarUrl: avatar(c.author) } })) },
+          },
+        }));
+      return ok({ node: { items: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } });
+    }
     if (query.includes('items(first: 100')) {
       const nodes = this.issues
         .filter((i) => i.projectIds.includes(String(v['id'])))

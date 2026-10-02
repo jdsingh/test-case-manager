@@ -318,6 +318,19 @@ export function serializeConfig(raw: Record<string, unknown>, draft: TeamDraft):
   return JSON.stringify(out, null, 2) + '\n';
 }
 
+/** Writes one feature's settings (DB-5) into the raw config, keeping everything else. */
+export function setFeatureSettings(raw: Record<string, unknown>, project: number, settings: FeatureSettings): string {
+  const out: Record<string, unknown> = { ...raw };
+  const features = isObject(raw['features']) ? { ...raw['features'] } : {};
+  const clean: FeatureSettings = {};
+  if (settings.targetVersion?.trim()) clean.targetVersion = settings.targetVersion.trim().replace(/^v/i, '');
+  if (settings.releaseDate?.trim()) clean.releaseDate = settings.releaseDate.trim();
+  if (Object.keys(clean).length) features[String(project)] = clean;
+  else delete features[String(project)];
+  out['features'] = features;
+  return JSON.stringify(out, null, 2) + '\n';
+}
+
 export function newConfigText(schemaUrl: string, login: string, roles: Role[]): string {
   const team: Team = { pm: [], techLead: [], android: [], ios: [] };
   for (const role of roles) team[role].push(login);

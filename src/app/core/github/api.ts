@@ -489,3 +489,47 @@ export async function fetchBugTarget(
   const bug = data.repository.labels.nodes.find((l) => l.name.toLowerCase() === 'bug');
   return { id: data.repository.id, bugLabelId: bug?.id ?? null };
 }
+
+/**
+ * The latest comments of every issue on a board, for the dashboard's burndown, "what
+ * changed" and failure details. Fifty issues per page keeps each query small.
+ */
+export async function fetchProjectComments(
+  gh: GitHubClient,
+  projectId: string,
+  nameWithOwner: string,
+): Promise<Map<number, CommentNode[]>> {
+  const out = new Map<number, CommentNode[]>();
+  let after: string | null = null;
+  for (let page = 0; page < 40; page++) {
+    type Item = {
+      content: { __typename: string; number?: number; repository?: { nameWithOwner: string }; comments?: { nodes: CommentNode[] } } | null;
+    };
+    const data: { node: { items: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: Item[] } } | null } =
+      await gh.graphql(
+        `query($id: ID!, $after: String) {
+          node(id: $id) {
+            ... on ProjectV2 {
+              items(first: 50, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes { content { __typename ... on Issue {
+                  number repository { nameWithOwner }
+                  comments(last: 60) { nodes { id body createdAt url author { login avatarUrl } } }
+                } } }
+              }
+            }
+          }
+        }`,
+        { id: projectId, after },
+      );
+    if (!data.node) break;
+    for (const { content: c } of data.node.items.nodes) {
+      if (c?.__typename === 'Issue' && c.number && c.repository?.nameWithOwner.toLowerCase() === nameWithOwner.toLowerCase()) {
+        out.set(c.number, c.comments?.nodes ?? []);
+      }
+    }
+    if (!data.node.items.pageInfo.hasNextPage) break;
+    after = data.node.items.pageInfo.endCursor;
+  }
+  return out;
+}
