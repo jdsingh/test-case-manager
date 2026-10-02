@@ -23,9 +23,12 @@ A static Angular single-page app that manages release test cases stored as GitHu
   - `config/save-config.ts`: commits the config, falling back to a pull request.
   - `session.ts` holds the token and viewer. `workspace.ts` holds the repo, config and roles. `feature-selection.ts` tracks the `?feature=` board.
   - `guards.ts`: auth, repo loading, the setup redirect and the role-based home.
-- `src/app/features/` holds the pages: onboarding (connect, repos, setup), shell (header and banners), team (Team settings).
+- `src/app/features/` holds the pages, lazy-loaded per route: onboarding, shell (header, banners, command palette), team, cases (list, detail, editor, import, bank), review, runs (run form, evidence, test session), inbox, dashboard.
+- `src/app/core/testcase/` holds the domain logic: the issue format (`model.ts`), Gherkin, comments, review rules, runs, readiness, the bank, and the stores.
+- `src/app/core/skill/skill.ts` is the Claude Code skill the app commits into testbank repos.
 - `*.test.ts` files sit next to the code and run under `bun test`. Keep core logic free of Angular so it stays testable this way.
-- `e2e/` has Playwright checks against the production build (with its CSP) and an in-memory GitHub mock (`mock-github.ts`). The mock matches operations by query text, so when you add a GraphQL operation, add a handler for it there too.
+- `src/app/core/demo/fake-github.ts` is an in-memory GitHub that answers exactly the calls the app makes (matched by query text). Sample-data mode uses it as the client's fetch (`demo.ts` seeds it); `e2e/mock-github.ts` routes Playwright's requests to it. When you add a GitHub call, add a handler there too, or sample mode and the e2e suite break.
+- `e2e/run.ts` drives the production build (with its CSP) through every milestone's flows. Sample mode lives in memory, so e2e steps in it must navigate inside the app, not reload.
 
 ## Rules
 

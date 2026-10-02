@@ -18,7 +18,9 @@ import {
   rolesFor,
   serializeConfig,
 } from '../../core/config/team-config';
-import { SaveResult, saveConfigFile } from '../../core/config/save-config';
+import { SaveResult, saveConfigFile, saveRepoFile } from '../../core/config/save-config';
+import { SKILL_MARKDOWN, SKILL_PATH } from '../../core/skill/skill';
+import { loginAvatar } from '../../core/avatar';
 import { AddPerson } from './add-person';
 
 /** Team settings: edit who holds each role without touching JSON (PRD 5.1a). */
@@ -64,7 +66,7 @@ import { AddPerson } from './add-person';
                     [class.problem]="isUnassignable(login)"
                     [title]="isUnassignable(login) ? login + ' has no access to this repo and can\\'t be assigned' : ''"
                   >
-                    <img class="avatar" [src]="'https://github.com/' + login + '.png?size=44'" alt="" />
+                    <img class="avatar" [src]="avatar(login)" alt="" />
                     <span>{{ login }}</span>
                     @if (isUnassignable(login)) {
                       <span class="warn-tag">no access</span>
@@ -138,6 +140,29 @@ import { AddPerson } from './add-person';
       } @else {
         <p class="muted">The team config isn't available. Fix the problem above, or run setup.</p>
       }
+
+      <section class="card stack skill" aria-labelledby="skill-h">
+        <h2 id="skill-h">Draft test cases with Claude Code</h2>
+        @if (ws.repo()?.hasSkill) {
+          <p class="small">
+            The <code>draft-test-cases</code> skill is in this repo. Clone it, run <code>claude</code> in the folder and ask,
+            for example, "draft test cases for the promo code screen in docs/promo-spec.md". New cases arrive as Drafts.
+          </p>
+        } @else {
+          <p class="small muted">
+            Add a Claude Code skill to this repo so anyone who clones it can have Claude draft Given/When/Then cases
+            from a spec, check them against existing cases and the regression bank, and create them as Drafts.
+          </p>
+          @if (editable()) {
+            <div class="row">
+              <button class="btn" type="button" (click)="installSkill()" [disabled]="installing()">
+                @if (installing()) { <span class="spinner" aria-hidden="true"></span> } Add the skill
+              </button>
+              @if (skillNote()) { <span class="small">{{ skillNote() }}</span> }
+            </div>
+          }
+        }
+      </section>
     </main>
   `,
   styles: `
@@ -208,6 +233,7 @@ import { AddPerson } from './add-person';
     .reviewers select {
       min-width: 200px;
     }
+    .skill h2 { font-size: 15px; }
     .footer {
       display: flex;
       align-items: center;
@@ -266,6 +292,27 @@ export class TeamSettingsPage {
   @HostListener('window:beforeunload', ['$event'])
   protected warnOnLeave(e: BeforeUnloadEvent): void {
     if (this.changes().length) e.preventDefault();
+  }
+
+  protected readonly avatar = loginAvatar;
+  protected readonly installing = signal(false);
+  protected readonly skillNote = signal<string | null>(null);
+
+  protected async installSkill(): Promise<void> {
+    const repo = this.ws.repo();
+    if (!repo) return;
+    this.installing.set(true);
+    this.skillNote.set(null);
+    try {
+      const r = await saveRepoFile(this.session.requireClient(), repo, SKILL_PATH, SKILL_MARKDOWN, 'Add the draft-test-cases Claude Code skill');
+      if (r.kind === 'pull-request') this.skillNote.set(`Proposed in pull request #${r.number} (protected branch).`);
+      await this.ws.reload();
+    } catch (e) {
+      const err = asGitHubError(e);
+      this.skillNote.set(err.kind === 'conflict' ? 'The repo changed meanwhile; try again.' : err.message);
+    } finally {
+      this.installing.set(false);
+    }
   }
 
   protected editUrl(): string {

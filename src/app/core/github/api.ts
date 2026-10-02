@@ -2,6 +2,7 @@
 
 import { GitHubClient, GitHubError } from './client';
 import type { IssueNode } from '../testcase/model';
+import { SKILL_PATH } from '../skill/skill';
 
 export const CONFIG_PATH = '.testcases/config.json';
 
@@ -42,6 +43,8 @@ export interface RepoInfo {
   labelNames: string[];
   /** Label name (lowercased) → node id. */
   labelIds: Record<string, string>;
+  /** Whether the draft-test-cases Claude Code skill is in the repo (AI-1). */
+  hasSkill: boolean;
 }
 
 export interface GitHubUser {
@@ -82,21 +85,23 @@ interface RepoQuery {
     viewerPermission: RepoPermission | null;
     defaultBranchRef: { name: string; target: { oid: string } } | null;
     config: { text: string | null } | null;
+    skill: { oid: string } | null;
     labels: { nodes: { id: string; name: string }[] };
   } | null;
 }
 
 export async function fetchRepo(gh: GitHubClient, owner: string, name: string): Promise<RepoInfo> {
   const data = await gh.graphql<RepoQuery>(
-    `query($owner: String!, $name: String!, $configExpr: String!) {
+    `query($owner: String!, $name: String!, $configExpr: String!, $skillExpr: String!) {
       repository(owner: $owner, name: $name) {
         id name nameWithOwner owner { login } isEmpty viewerPermission
         defaultBranchRef { name target { oid } }
         config: object(expression: $configExpr) { ... on Blob { text } }
+        skill: object(expression: $skillExpr) { ... on Blob { oid } }
         labels(first: 100) { nodes { id name } }
       }
     }`,
-    { owner, name, configExpr: `HEAD:${CONFIG_PATH}` },
+    { owner, name, configExpr: `HEAD:${CONFIG_PATH}`, skillExpr: `HEAD:${SKILL_PATH}` },
   );
   const r = data.repository;
   if (!r) throw new GitHubError('not_found', `Repository ${owner}/${name} was not found, or the token can't see it.`);
@@ -112,6 +117,7 @@ export async function fetchRepo(gh: GitHubClient, owner: string, name: string): 
     configText: r.config?.text ?? null,
     labelNames: r.labels.nodes.map((l) => l.name),
     labelIds: Object.fromEntries(r.labels.nodes.map((l) => [l.name.toLowerCase(), l.id])),
+    hasSkill: !!r.skill,
   };
 }
 
@@ -451,12 +457,20 @@ export interface AssignedIssue {
 }
 
 /** Open test cases in the repo assigned to `login`: the same set as GitHub's "Assigned to me" (IN-1). */
-export async function searchAssignedCases(
+export function searchAssignedCases(
   gh: GitHubClient,
   nameWithOwner: string,
   login: string,
 ): Promise<{ total: number; items: AssignedIssue[] }> {
-  const q = `repo:${nameWithOwner} is:issue is:open label:testcase assignee:${login}`;
+  return searchCases(gh, `repo:${nameWithOwner} is:issue is:open label:testcase assignee:${login}`);
+}
+
+/** The regression bank (RB-1): every open case labelled `regression`, across features. */
+export function searchBank(gh: GitHubClient, nameWithOwner: string): Promise<{ total: number; items: AssignedIssue[] }> {
+  return searchCases(gh, `repo:${nameWithOwner} is:issue is:open label:testcase label:regression`);
+}
+
+async function searchCases(gh: GitHubClient, q: string): Promise<{ total: number; items: AssignedIssue[] }> {
   type Node = IssueNode & { projectItems: { nodes: { project: { id: string; number: number; title: string } }[] } };
   const data = await gh.graphql<{ search: { issueCount: number; nodes: (Node | Record<string, never>)[] } }>(
     `query($q: String!) {

@@ -5,6 +5,14 @@ import { Session } from '../../core/session';
 import { asGitHubError } from '../../core/workspace';
 import { lastRepoUrl } from '../../core/last-repo';
 
+/** Kept here (not imported from the demo module) so the demo code loads only when used. */
+const DEMO_PEOPLE_LIST = [
+  { login: 'priya-pm', label: 'Product manager' },
+  { login: 'sam-android', label: 'Android engineer' },
+  { login: 'jo-ios', label: 'iOS engineer' },
+  { login: 'alex-lead', label: 'Tech lead' },
+];
+
 const CLASSIC_TOKEN_URL =
   'https://github.com/settings/tokens/new?scopes=repo,project&description=Test%20Case%20Manager';
 const FINE_GRAINED_URL = 'https://github.com/settings/personal-access-tokens/new';
@@ -13,6 +21,10 @@ const FINE_GRAINED_URL = 'https://github.com/settings/personal-access-tokens/new
 @Component({
   selector: 'app-connect-page',
   imports: [FormsModule],
+  styles: `
+    .sample { border-style: dashed; }
+    .wrap { flex-wrap: wrap; }
+  `,
   template: `
     <main class="page-narrow stack">
       <div class="stack" style="gap: 6px">
@@ -79,6 +91,21 @@ const FINE_GRAINED_URL = 'https://github.com/settings/personal-access-tokens/new
           </button>
         </div>
       </form>
+
+      <section class="card stack sample">
+        <h2>Just looking? Try it with sample data</h2>
+        <p class="muted small">
+          A sample feature with test cases in every state, runs with screenshots, a failed run with a bug and a review
+          waiting. Everything stays in this browser tab: nothing is sent to GitHub, and it resets when you reload.
+        </p>
+        <div class="row wrap">
+          @for (p of people; track p.login) {
+            <button class="btn" type="button" (click)="tryDemo(p.login)" [disabled]="busy()">
+              Try as {{ p.label.toLowerCase() }}
+            </button>
+          }
+        </div>
+      </section>
     </main>
   `,
 })
@@ -93,6 +120,20 @@ export class ConnectPage {
   protected forgetOnClose = false;
   protected readonly busy = signal(false);
   protected readonly error = signal<string | null>(null);
+
+  protected readonly people = DEMO_PEOPLE_LIST;
+
+  protected async tryDemo(login: string): Promise<void> {
+    this.busy.set(true);
+    try {
+      await this.session.signInDemo(login);
+      await this.router.navigateByUrl('/r/acme/shop-app-testbank');
+    } catch (e) {
+      this.error.set(asGitHubError(e).message);
+    } finally {
+      this.busy.set(false);
+    }
+  }
 
   async connect(): Promise<void> {
     this.busy.set(true);

@@ -35,6 +35,7 @@ import { closeComment, editComment, lineComment, reviewComment, submitComment } 
 import { Decision, LineNote, historyOf } from './review';
 import { BugLink, RunEvent, RunMeta, bugComment, canRun, latestRuns, runComment, runLabels, runsOf, statusFromRuns } from './runs';
 import { EvidenceRef, UploadFile, uploadEvidence } from '../evidence/evidence';
+import { copyNote, copyStartsApproved } from './bank';
 
 export type CasesLoad = { status: 'idle' | 'loading' | 'ready' } | { status: 'error'; error: GitHubError };
 
@@ -55,6 +56,8 @@ export class CasesStore {
   private readonly features = inject(FeatureSelection);
 
   readonly cases = signal<TestCase[]>([]);
+  /** Cases opened from outside the selected feature (links, the bank, the inbox). */
+  private readonly others = signal<TestCase[]>([]);
   /** Bumped after every write, so views like the inbox know to refresh. */
   readonly writes = signal(0);
   readonly load = signal<CasesLoad>({ status: 'idle' });
@@ -112,14 +115,14 @@ export class CasesStore {
   }
 
   byNumber(n: number): TestCase | null {
-    return this.cases().find((c) => c.number === n) ?? null;
+    return this.cases().find((c) => c.number === n) ?? this.others().find((c) => c.number === n) ?? null;
   }
 
   async detail(number: number): Promise<CaseDetail> {
     const repo = this.requireRepo();
     const { issue, comments } = await fetchIssue(this.session.requireClient(), repo.owner, repo.name, number);
     const testCase = fromIssue(issue);
-    this.upsert(testCase);
+    this.upsert(testCase, { write: false });
     return { testCase, comments };
   }
 
@@ -142,7 +145,7 @@ export class CasesStore {
       projectV2Ids: project ? [project.id] : [],
     });
     if (opts.submitTo) await addComment(gh, issue.id, submitComment(opts.submitTo, false));
-    return this.upsert(fromIssue(issue));
+    return this.upsert(fromIssue(issue), { add: true });
   }
 
   /**
@@ -182,10 +185,10 @@ export class CasesStore {
    * Saves an edit. A scenario change on a case past review sends it back to In review
    * with a comment (AU-5, AU-8); changes-requested cases wait for an explicit resubmit.
    */
-  async save(tc: TestCase, draft: TestCaseDraft): Promise<TestCase> {
+  async save(tc: TestCase, draft: TestCaseDraft, extraBody: string = tc.extraBody): Promise<TestCase> {
     const before = draftOf(tc);
     const changes = describeEdit(before, draft);
-    if (!changes.length) return tc;
+    if (!changes.length && extraBody === tc.extraBody) return tc;
     const reviewed = tc.status === 'approved' || tc.status === 'passed' || tc.status === 'failed' || tc.status === 'blocked';
     const backToReview = reviewed && isScenarioChange(before, draft);
     const status: Status = backToReview ? 'in-review' : (tc.status ?? 'draft');
@@ -194,13 +197,13 @@ export class CasesStore {
     const issue = await updateIssue(gh, {
       id: tc.id,
       title: issueTitle(draft.title),
-      body: renderBody(draft, tc.extraBody),
+      body: renderBody(draft, extraBody),
       labelIds: await this.labelIds(
         labelsFor(tc.labels, { ...draft, status, regression: tc.regression, ...(backToReview ? { runLabels: [] } : {}) }),
       ),
       ...(backToReview ? { assigneeIds: await this.idsFor(reviewers) } : {}),
     });
-    if (tc.status !== 'draft') {
+    if (tc.status !== 'draft' && changes.length) {
       await addComment(gh, tc.id, editComment(changes, backToReview, reviewers));
     }
     return this.upsert(fromIssue(issue));
@@ -302,6 +305,69 @@ export class CasesStore {
       if (!includesLogin(chosen, ranked[0])) chosen.push(ranked[0]);
     }
     return chosen;
+  }
+
+  // ---- regression bank (5.6) ------------------------------------------------------
+
+  /** RB-1: add to or remove from the regression bank. */
+  async setRegression(tc: TestCase, on: boolean): Promise<TestCase> {
+    const issue = await updateIssue(this.session.requireClient(), {
+      id: tc.id,
+      labelIds: await this.labelIds(
+        labelsFor(tc.labels, { priority: tc.priority ?? 'P2', platforms: tc.platforms, status: tc.status ?? 'draft', regression: on }),
+      ),
+    });
+    return this.upsert(fromIssue(issue));
+  }
+
+  /**
+   * RB-3 / RB-4: copies bank cases into the selected feature. A copy of an approved case
+   * starts Approved with its runners assigned; otherwise it starts as a Draft.
+   */
+  async copyFromBank(
+    sources: TestCase[],
+    progress: (done: number) => void = () => {},
+    spacingMs = 1000,
+  ): Promise<{ created: TestCase[]; error: GitHubError | null }> {
+    const repo = this.requireRepo();
+    const project = this.features.project();
+    const gh = this.session.requireClient();
+    const created: TestCase[] = [];
+    for (const source of sources) {
+      const started = Date.now();
+      try {
+        const approved = copyStartsApproved(source);
+        const draft = draftOf(source);
+        const assignees = approved ? this.suggestExecutors(source) : [this.requireMe()];
+        const issue = await createIssue(gh, {
+          repositoryId: repo.id,
+          title: issueTitle(draft.title),
+          body: renderBody(draft, copyNote(source)),
+          labelIds: await this.labelIds(labelsFor([], { ...draft, status: approved ? 'approved' : 'draft', regression: false })),
+          assigneeIds: await this.idsFor(assignees),
+          projectV2Ids: project ? [project.id] : [],
+        });
+        await addComment(
+          gh,
+          issue.id,
+          `<!-- tcm:edit {"changes":[],"copiedFrom":${source.number}} -->\n📋 **Copied from the regression bank: #${source.number}.**` +
+            (approved ? ' It was already approved there, so it is ready to run.' : ' It still needs review.'),
+        );
+        created.push(this.upsert(fromIssue(issue), { add: true }));
+      } catch (e) {
+        return { created, error: asGitHubError(e) };
+      }
+      progress(created.length);
+      const wait = spacingMs - (Date.now() - started);
+      if (wait > 0 && created.length < sources.length) await sleep(wait);
+    }
+    return { created, error: null };
+  }
+
+  /** RB-5: bring an out-of-date copy in line with its bank original (a scenario edit, so it goes back to review). */
+  async updateCopy(copy: TestCase, source: TestCase): Promise<TestCase> {
+    const draft = { ...draftOf(source), priority: copy.priority ?? source.priority ?? 'P2' };
+    return this.save(copy, draft, copyNote(source));
   }
 
   // ---- runs (5.5) ---------------------------------------------------------------
@@ -479,15 +545,17 @@ export class CasesStore {
     return logins.map((l) => this.userIds.get(l.toLowerCase())).filter((x): x is string => !!x);
   }
 
-  private upsert(tc: TestCase): TestCase {
-    this.writes.update((n) => n + 1);
-    this.cases.update((list) => {
-      const i = list.findIndex((c) => c.number === tc.number);
-      if (i < 0) return [...list, tc];
-      const next = [...list];
-      next[i] = tc;
-      return next;
-    });
+  /**
+   * Stores a fresh copy of a case. New cases join the feature's list (`add`); a case
+   * from elsewhere (e.g. a bank original opened from a link) is kept aside so it doesn't
+   * appear in this feature's list. Reads don't count as writes.
+   */
+  private upsert(tc: TestCase, opts: { add?: boolean; write?: boolean } = {}): TestCase {
+    if (opts.write !== false) this.writes.update((n) => n + 1);
+    const replace = (list: TestCase[]) => list.map((c) => (c.number === tc.number ? tc : c));
+    if (this.cases().some((c) => c.number === tc.number)) this.cases.update(replace);
+    else if (opts.add) this.cases.update((list) => [...list, tc]);
+    else this.others.update((list) => [...list.filter((c) => c.number !== tc.number), tc]);
     return tc;
   }
 

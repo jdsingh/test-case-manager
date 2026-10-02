@@ -15,6 +15,8 @@ import { StepNotes } from '../review/step-notes';
 import { RunsSection } from '../runs/runs-section';
 import { ReviewPanel } from '../review/review-panel';
 import { historyOf } from '../../core/testcase/review';
+import { BankStore } from '../../core/testcase/bank-store';
+import { copyInfo, isOutOfDate, visibleExtra } from '../../core/testcase/bank';
 import { Session } from '../../core/session';
 import { Platform, sameLogin } from '../../core/config/team-config';
 import { PLATFORM_NAMES } from '../../core/testcase/model';
@@ -79,6 +81,11 @@ interface ActivityItem {
                 </button>
               }
               <button class="btn" type="button" (click)="duplicate(tc)">Duplicate</button>
+              @if (!copy()) {
+                <button class="btn" type="button" (click)="toggleRegression(tc)" [disabled]="busy()">
+                  {{ tc.regression ? 'Remove from regression bank' : 'Add to regression bank' }}
+                </button>
+              }
               <button class="btn" type="button" (click)="closeDialog.showModal()" [disabled]="busy()">
                 Close as won't test
               </button>
@@ -87,6 +94,22 @@ interface ActivityItem {
             }
             <span class="spacer"></span>
             <a class="small" [href]="tc.url" target="_blank" rel="noopener">Open in GitHub</a>
+          </div>
+        }
+
+        @if (copy(); as cp) {
+          <div [class]="outdatedSource() ? 'banner banner-warn' : 'banner'" role="status">
+            <div>
+              Copied from the regression bank:
+              <a [routerLink]="['..', cp.source]" queryParamsHandling="preserve">#{{ cp.source }}</a>.
+              @if (outdatedSource(); as src) {
+                The original has changed since it was copied.
+                @if (ws.canWriteRepo() && !tc.closed) {
+                  <button class="btn btn-link" type="button" (click)="updateCopy(tc, src)" [disabled]="busy()">Update this copy</button>
+                  <span class="muted small">(a scenario change, so it goes back to review)</span>
+                }
+              }
+            </div>
           </div>
         }
 
@@ -123,10 +146,10 @@ interface ActivityItem {
         @if (tc.steps.length) {
           <app-step-notes [tc]="tc" [notes]="history().lineNotes" [canAccept]="canAccept()" (changed)="reload()" />
         }
-        @if (tc.extraBody) {
+        @if (notesText()) {
           <section class="stack" style="gap: 4px">
             <h2 class="h-small">Notes</h2>
-            <p class="notes">{{ tc.extraBody }}</p>
+            <p class="notes">{{ notesText() }}</p>
           </section>
         }
 
@@ -292,6 +315,20 @@ export class CaseDetailPage {
 
   protected readonly tc = computed(() => this.store.byNumber(this.number()));
   protected readonly history = computed(() => historyOf(this.comments()));
+  private readonly bank = inject(BankStore);
+  protected readonly copy = computed(() => {
+    const tc = this.tc();
+    return tc ? copyInfo(tc) : null;
+  });
+  protected readonly outdatedSource = computed(() => {
+    const tc = this.tc();
+    return tc && this.copy() ? isOutOfDate(tc, this.bank.bankCases()) : null;
+  });
+  protected readonly notesText = computed(() => {
+    const tc = this.tc();
+    // The copy note is shown as the banner above; the rest are people's notes.
+    return tc ? visibleExtra(tc.extraBody).replace(/^_Copied from the regression bank: #\d+\._$/m, '').trim() : '';
+  });
   /** Suggestions are accepted by the PM or whoever wrote the case. */
   protected readonly canAccept = computed(() => {
     const me = this.session.viewer()?.login ?? '';
@@ -368,6 +405,9 @@ export class CaseDetailPage {
 
   constructor() {
     effect(() => {
+      if (this.copy()) untracked(() => void this.bank.ensure());
+    });
+    effect(() => {
       const n = this.number();
       untracked(() => void this.loadDetail(n));
     });
@@ -406,6 +446,14 @@ export class CaseDetailPage {
       await this.store.assign(tc, unique);
       this.assignDialogRef()?.nativeElement.close();
     });
+  }
+
+  protected async toggleRegression(tc: TestCase): Promise<void> {
+    await this.act(() => this.store.setRegression(tc, !tc.regression));
+  }
+
+  protected async updateCopy(tc: TestCase, source: TestCase): Promise<void> {
+    await this.act(() => this.store.updateCopy(tc, source));
   }
 
   protected reload(): void {

@@ -57,6 +57,11 @@ export const routes: Routes = [
         title: title('Import'),
       },
       {
+        path: 'cases/bank',
+        loadComponent: () => import('./features/cases/bank.page').then((m) => m.BankPage),
+        title: title('Regression bank'),
+      },
+      {
         path: 'cases/:number',
         loadComponent: () => import('./features/cases/case-detail.page').then((m) => m.CaseDetailPage),
         title: title('Test case'),

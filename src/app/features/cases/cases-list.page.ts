@@ -1,9 +1,11 @@
-import { Component, ElementRef, HostListener, computed, inject, signal, viewChild } from '@angular/core';
+import { Component, ElementRef, HostListener, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
 import { Workspace, asGitHubError } from '../../core/workspace';
 import { canRun } from '../../core/testcase/runs';
+import { BankStore } from '../../core/testcase/bank-store';
+import { copyInfo, isOutOfDate } from '../../core/testcase/bank';
 import { FeatureSelection } from '../../core/feature-selection';
 import { CasesStore } from '../../core/testcase/cases-store';
 import { PRIORITIES, Platform, Priority } from '../../core/config/team-config';
@@ -46,6 +48,7 @@ interface Filters {
           <a class="btn" routerLink="../session" queryParamsHandling="preserve">Start test session</a>
         }
         @if (ws.canWriteRepo() && features.project()) {
+          <a class="btn" routerLink="bank" queryParamsHandling="preserve">Add from bank</a>
           <a class="btn" routerLink="import" queryParamsHandling="preserve">Import</a>
           <a class="btn btn-primary" routerLink="new" queryParamsHandling="preserve" title="New test case (N)">
             New test case
@@ -198,6 +201,9 @@ interface Filters {
                         <a class="title" [routerLink]="[tc.number]" queryParamsHandling="preserve">{{ tc.title }}</a>
                         @if (tc.regression) {
                           <span class="badge badge-outline small">regression</span>
+                        }
+                        @if (outdated().has(tc.number)) {
+                          <span class="badge status-in-review small" title="The bank original changed after this copy was made">out of date</span>
                         }
                       </td>
                       <td><app-priority [value]="tc.priority" /></td>
@@ -357,12 +363,26 @@ export class CasesListPage {
     }
   }
 
+  private readonly bank = inject(BankStore);
+  /** Copies whose bank original has changed since (RB-5). */
+  protected readonly outdated = computed(() => {
+    const bank = this.bank.bankCases();
+    return new Set(this.store.cases().filter((c) => isOutOfDate(c, bank)).map((c) => c.number));
+  });
+
   protected readonly isEngineer = computed(() => this.ws.roles().includes('android') || this.ws.roles().includes('ios'));
 
   protected readonly loadError = computed(() => {
     const l = this.store.load();
     return l.status === 'error' ? l.error.message : '';
   });
+
+  constructor() {
+    // Only needed when the feature has copies from the bank.
+    effect(() => {
+      if (this.store.cases().some((c) => copyInfo(c))) untracked(() => void this.bank.ensure());
+    });
+  }
 
   @HostListener('document:keydown', ['$event'])
   protected onKey(e: KeyboardEvent): void {

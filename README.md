@@ -50,7 +50,14 @@ Milestone **M5 (dashboard)** is built:
 - What changed since your last visit, and a one-click Markdown readiness report for Slack or a release PR
 - Target version and release date editable on the dashboard (saved to the config)
 
-Still to come: the regression bank and Claude Code skill (M6).
+Milestone **M6 (regression bank, Claude Code skill, polish)** is built:
+
+- Regression bank: mark cases as regression; **Add from bank** copies them into another feature (copies of approved cases start Approved and get runners); copies show **out of date** when the original changes, with one-click update
+- `draft-test-cases` Claude Code skill, added to the testbank repo by setup (or from Team settings): clone the repo, run `claude`, and ask it to draft test cases from a spec; it creates them as Drafts in the app's format
+- Cmd/Ctrl-K command palette to jump to any case, feature or action
+- **Try with sample data** on the Connect screen: the whole app runs on an in-memory GitHub in the browser (nothing is sent anywhere), switchable between the four roles
+
+All six PRD milestones are built.
 
 ## Develop
 

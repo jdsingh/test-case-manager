@@ -104,6 +104,7 @@ try {
     const created = JSON.parse(gh.configText ?? '{}');
     check(created.team?.pm?.[0] === 'priya-pm', 'creator is PM in the new config');
     check(String(created.$schema).endsWith('/config.schema.json'), 'config links the JSON Schema');
+    check(gh.hasSkill && gh.commits.some((c) => c.path === '.claude/skills/draft-test-cases/SKILL.md' && c.contents.includes('name: draft-test-cases')), 'Claude Code skill added at setup (AI-1)');
 
     // 2. Team settings: add people, save.
     console.log('Team settings');
@@ -326,7 +327,7 @@ try {
     const edited = gh.issue(1);
     check(edited.labels.includes('status:in-review') && edited.labels.includes('regression'), 'approved case back in review, regression kept');
     check(edited.comments.at(-1)?.body.includes('needs review again'), 'edit comment explains why');
-    check(await shows(page.getByText('In review').first()), 'detail page shows the new status');
+    check(await shows(page.locator('main').getByText('In review').first()), 'detail page shows the new status');
 
     // Changes requested → edit → resubmit.
     await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/2`);
@@ -738,6 +739,98 @@ Scenario: Order history shows the new order
     await page.waitForURL(/\/cases\?.*priority=P0.*status=failed|\/cases\?.*status=failed.*priority=P0/);
     check(await countIs(page.locator('table.cases tbody tr'), 1), 'grid cell opens the filtered list');
     await page.context().close();
+  }
+
+  // 11. M6: sample data (no GitHub at all), command palette, regression bank.
+  console.log('Sample data, palette and regression bank (M6)');
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1200, height: 860 } });
+    const page = await ctx.newPage();
+    current = page;
+    const toGitHub: string[] = [];
+    page.on('request', (r) => {
+      if (/github(usercontent)?\.com/.test(new URL(r.url()).hostname)) toGitHub.push(r.url());
+    });
+    page.on('pageerror', (e) => {
+      failures++;
+      console.log(`  ✗ page error: ${e.message}`);
+    });
+    page.on('console', (m) => {
+      if (m.type() === 'error') {
+        failures++;
+        console.log(`  ✗ console error: ${m.text()}`);
+      }
+    });
+    page.on('dialog', (d) => void d.accept());
+
+    await page.goto(`${BASE}/connect`);
+    await page.getByRole('button', { name: 'Try as product manager' }).click();
+    await page.waitForURL(/\/cases/);
+    const rows = page.locator('table.cases tbody tr');
+    check(await countIs(rows, 9), 'sample feature loads with 9 cases (NV-3)');
+    check(await shows(page.getByText('Sample data.')), 'sample-data banner');
+    await page.screenshot({ path: join(SHOTS, '20-sample-list.png'), fullPage: true });
+
+    // Command palette (NV-1).
+    await page.locator('h1').click();
+    await page.keyboard.press('ControlOrMeta+k');
+    await page.getByPlaceholder('Jump to a test case, feature or action…').fill('apple');
+    await page.keyboard.press('Enter');
+    await page.getByRole('heading', { name: /Pay with Apple Pay/ }).waitFor();
+    check(true, 'Cmd-K jumps to a case');
+    check(await shows(page.locator('app-evidence-thumb img[src^="blob:"]')), 'sample evidence renders');
+    check(await shows(page.getByRole('link', { name: 'acme/shop-app#212' })), 'sample bug link');
+
+    // Regression bank (RB-1 to RB-5).
+    await page.keyboard.press('ControlOrMeta+k');
+    await page.getByPlaceholder('Jump to a test case, feature or action…').fill('add from');
+    await page.keyboard.press('Enter');
+    await page.waitForURL(/\/cases\/bank/);
+    const bankItems = page.locator('.list li');
+    check(await countIs(bankItems, 2), 'bank offers the 2 regression cases not yet in this feature');
+    await page.getByLabel(/Add #/).first().check();
+    await page.screenshot({ path: join(SHOTS, '21-bank.png'), fullPage: true });
+    await page.getByRole('button', { name: /^Add 1 to/ }).click();
+    await page.getByText('Added 1 case.').waitFor({ timeout: 15000 });
+    await page.getByRole('link', { name: 'Back to the list' }).click();
+    check(await countIs(rows, 10), 'copy joins the feature');
+    const copyRow = rows.filter({ hasText: 'Log in with email and password' });
+    check(await shows(copyRow.getByText('Approved')), 'copy of an approved case is ready to run (RB-4)');
+
+    await rows.filter({ hasText: 'Cart persists' }).getByRole('link').click();
+    await page.getByRole('button', { name: 'Add to regression bank' }).click();
+    check(await shows(page.getByRole('button', { name: 'Remove from regression bank' })), 'mark as regression (RB-1)');
+
+    // Edit a bank original, then see its copy flagged and update it (RB-5). Sample data
+    // lives in memory, so everything below navigates inside the app (no reloads).
+    await page.getByRole('link', { name: '← Test cases' }).click();
+    await rows.filter({ hasText: 'Network loss' }).getByRole('link').click();
+    await page.getByRole('link', { name: '#3' }).click();
+    await page.getByRole('link', { name: 'Edit' }).click();
+    await page.getByLabel('Step 5 text').fill('one order is created and one confirmation email is sent');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await page.waitForURL(/\/cases\/3(\?|$)/);
+    await page.getByRole('link', { name: '← Test cases' }).click();
+    await rows.first().waitFor();
+    check(await shows(page.getByText('out of date')), 'copy flagged out of date in the list');
+    check(!(await page.locator('table.cases').innerText()).includes('#3 '), "bank original from another feature doesn't leak into this list");
+    await rows.filter({ hasText: 'Network loss' }).getByRole('link').click();
+    await page.getByRole('button', { name: 'Update this copy' }).click();
+    await page.locator('main').getByText('In review').first().waitFor();
+    check(await shows(page.locator('.step', { hasText: 'one confirmation email is sent' })), 'copy updated from the original, back to review');
+
+    // Switch role; the Claude Code skill shows as installed.
+    await page.getByLabel('Viewing as').selectOption('jo-ios');
+    await page.waitForURL(/\/inbox/);
+    check(await shows(page.locator('section.group', { hasText: 'To run on iOS' })), 'switching role lands on that role\'s home');
+    await page.getByRole('link', { name: 'Team', exact: true }).click();
+    check(await shows(page.getByText('skill is in this repo')), 'skill shown as installed');
+    await page.reload();
+    check(await shows(page.getByText('skill is in this repo')), 'a reload in sample mode comes back cleanly (fresh sample data)');
+    await page.getByRole('button', { name: 'Exit sample data' }).click();
+    await page.waitForURL(/\/connect/);
+    check(toGitHub.length === 0, `sample data made no requests to GitHub (${toGitHub.length})`);
+    await ctx.close();
   }
 } catch (e) {
   failures++;

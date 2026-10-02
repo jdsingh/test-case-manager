@@ -5,6 +5,8 @@ import { Workspace } from './workspace';
 import { homeFor } from './config/team-config';
 import { lastRepoUrl, rememberRepo } from './last-repo';
 
+export const DEMO_URL = '/r/acme/shop-app-testbank';
+
 /** Signed-in only. Remembers where the user was going so deep links survive onboarding (NV-2). */
 export const authGuard: CanActivateFn = async (_route, state) => {
   const session = inject(Session);
@@ -17,10 +19,15 @@ export const authGuard: CanActivateFn = async (_route, state) => {
 /** Loads the repo named in the URL before its pages render. Errors are shown by the shell. */
 export const repoGuard: CanActivateFn = async (route) => {
   const ws = inject(Workspace);
+  const session = inject(Session); // inject() only works before the first await
   const owner = route.paramMap.get('owner') ?? '';
   const name = route.paramMap.get('repo') ?? '';
+  // Guards run in parallel: make sure the session (and its client) is ready first.
+  await session.restore();
+  if (session.state().status !== 'signed-in') return true; // authGuard redirects
   await ws.open(owner, name);
-  if (ws.load().status === 'ready') rememberRepo(owner, name);
+  // The sample repo isn't real, so it's never offered as "your last repo".
+  if (ws.load().status === 'ready' && !session.isDemo()) rememberRepo(owner, name);
   return true;
 };
 
@@ -52,5 +59,6 @@ export const startGuard: CanActivateFn = async () => {
   const router = inject(Router);
   await session.restore();
   if (session.state().status !== 'signed-in') return router.createUrlTree(['/connect']);
+  if (session.isDemo()) return router.parseUrl(DEMO_URL);
   return router.parseUrl(lastRepoUrl() ?? '/repos');
 };

@@ -4,7 +4,8 @@ import { Session } from '../../core/session';
 import { Workspace, asGitHubError } from '../../core/workspace';
 import { CONFIG_PATH, createLabel } from '../../core/github/api';
 import { ROLES, ROLE_LABELS, Role, newConfigText } from '../../core/config/team-config';
-import { SaveResult, saveConfigFile } from '../../core/config/save-config';
+import { SaveResult, saveConfigFile, saveRepoFile } from '../../core/config/save-config';
+import { SKILL_MARKDOWN, SKILL_PATH } from '../../core/skill/skill';
 
 /** One-click repo bootstrap: labels + team config (ON-4, Team settings "first setup"). */
 @Component({
@@ -67,6 +68,20 @@ import { SaveResult, saveConfigFile } from '../../core/config/save-config';
                   }
                 </fieldset>
               }
+            </div>
+          </div>
+          <div class="check">
+            <span [class]="ws.repo()?.hasSkill ? 'dot done' : 'dot todo'" aria-hidden="true"></span>
+            <div>
+              <strong>Claude Code skill</strong> <span class="muted small">(optional)</span>
+              <div class="muted small">
+                @if (ws.repo()?.hasSkill) {
+                  <code>{{ skillPath }}</code> is in the repo.
+                } @else {
+                  <label class="row"><input type="checkbox" [checked]="addSkill()" (change)="addSkill.set(!addSkill())" />
+                    Add <code>draft-test-cases</code>, so anyone who clones this repo can ask Claude Code to draft test cases.</label>
+                }
+              </div>
             </div>
           </div>
         </section>
@@ -143,6 +158,8 @@ export class SetupPage {
   protected readonly roleLabels = ROLE_LABELS;
   protected readonly configPath = CONFIG_PATH;
   protected readonly picked = signal<Role[]>(['pm']);
+  protected readonly addSkill = signal(true);
+  protected readonly skillPath = SKILL_PATH;
   protected readonly busy = signal(false);
   protected readonly progress = signal('');
   protected readonly error = signal<string | null>(null);
@@ -186,6 +203,13 @@ export class SetupPage {
           'Creates the team config. Edit the team in the app under Team settings.',
         );
         if (result.kind === 'pull-request') this.pr.set(result);
+        else if (this.addSkill() && !repo.hasSkill) {
+          this.progress.set('Adding the Claude Code skill…');
+          await saveRepoFile(gh, { ...repo, headOid: result.oid }, SKILL_PATH, SKILL_MARKDOWN, 'Add the draft-test-cases Claude Code skill');
+        }
+      } else if (this.addSkill() && !repo.hasSkill) {
+        this.progress.set('Adding the Claude Code skill…');
+        await saveRepoFile(gh, repo, SKILL_PATH, SKILL_MARKDOWN, 'Add the draft-test-cases Claude Code skill');
       }
       await this.ws.reload();
       if (!this.ws.needsSetup()) {

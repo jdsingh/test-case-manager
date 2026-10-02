@@ -4,6 +4,7 @@ import { Session } from '../../core/session';
 import { Workspace } from '../../core/workspace';
 import { FeatureSelection } from '../../core/feature-selection';
 import { InboxStore } from '../../core/testcase/inbox-store';
+import { CommandPalette } from './command-palette';
 import { CONFIG_PATH } from '../../core/github/api';
 import { ROLE_NAMES } from '../../core/config/team-config';
 import { avatarAt } from '../../core/avatar';
@@ -11,7 +12,7 @@ import { avatarAt } from '../../core/avatar';
 /** Layout for everything under /r/:owner/:repo. */
 @Component({
   selector: 'app-repo-shell',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, CommandPalette],
   template: `
     <header class="top">
       <div class="top-inner">
@@ -35,6 +36,10 @@ import { avatarAt } from '../../core/avatar';
 
         <span class="spacer"></span>
 
+        <button class="btn jump" type="button" (click)="palette.show()" title="Jump to anything (⌘K / Ctrl+K)">
+          <span class="jump-label">Jump to…</span> <span class="kbd">⌘K</span>
+        </button>
+
         @if (openProjects().length) {
           <label class="feature">
             <span class="sr-only">Feature</span>
@@ -56,7 +61,24 @@ import { avatarAt } from '../../core/avatar';
       </div>
     </header>
 
+    <app-command-palette #palette />
+
     <div class="banners">
+      @if (session.isDemo()) {
+        <div class="banner sample-banner" role="status">
+          <span><strong>Sample data.</strong> Nothing is saved to GitHub, and it resets when you reload.</span>
+          <span class="spacer"></span>
+          <label class="row small">
+            Viewing as
+            <select (change)="switchDemo($any($event.target).value)">
+              @for (p of demoPeople; track p.login) {
+                <option [value]="p.login" [selected]="p.login === session.viewer()?.login">{{ p.label }}</option>
+              }
+            </select>
+          </label>
+          <button class="btn btn-link small" type="button" (click)="signOut()">Exit sample data</button>
+        </div>
+      }
       @if (missingScopes().length) {
         <div class="banner banner-warn" role="status">
           Your token is missing the {{ missingScopes().join(' and ') }} scope. Some features won't work.
@@ -168,6 +190,16 @@ import { avatarAt } from '../../core/avatar';
       background: var(--accent-soft);
       color: var(--accent);
     }
+    .jump { height: 32px; color: var(--text-2); font-weight: 400; gap: 8px; }
+    .brand, .repo, .nav a, .who { white-space: nowrap; }
+    .nav a { display: inline-flex; align-items: center; }
+    .feature select { max-width: 190px; }
+    @media (max-width: 1320px) {
+      .repo, .jump-label { display: none; }
+    }
+    @media (max-width: 1100px) {
+      .who span { display: none; }
+    }
     .feature select {
       height: 32px;
       max-width: 220px;
@@ -178,6 +210,8 @@ import { avatarAt } from '../../core/avatar';
       gap: 6px;
       font-weight: 500;
     }
+    .sample-banner { align-items: center; background: var(--accent-soft); border-color: var(--accent); }
+    .sample-banner select { width: auto; height: 28px; }
     .banners {
       max-width: 960px;
       margin: 0 auto;
@@ -244,6 +278,19 @@ export class RepoShell {
       queryParams: { feature: value || null },
       queryParamsHandling: 'merge',
     });
+  }
+
+  protected readonly demoPeople = [
+    { login: 'priya-pm', label: 'Product manager (Priya)' },
+    { login: 'sam-android', label: 'Android engineer (Sam)' },
+    { login: 'jo-ios', label: 'iOS engineer (Jo)' },
+    { login: 'alex-lead', label: 'Tech lead (Alex)' },
+  ];
+
+  /** Same sample data, seen as someone else: each role lands on its own home screen. */
+  protected async switchDemo(login: string): Promise<void> {
+    await this.session.signInDemo(login);
+    await this.router.navigateByUrl('/r/acme/shop-app-testbank');
   }
 
   protected signOut(): void {
