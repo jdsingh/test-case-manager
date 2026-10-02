@@ -9,11 +9,11 @@ export class EvidenceCache {
   private readonly session = inject(Session);
   private readonly urls = new Map<string, Promise<string>>();
 
-  get(nameWithOwner: string, path: string): Promise<string> {
+  get(nameWithOwner: string, path: string, type = ''): Promise<string> {
     const key = `${nameWithOwner}:${path}`;
     let p = this.urls.get(key);
     if (!p) {
-      p = evidenceObjectUrl(this.session.requireClient(), nameWithOwner, path);
+      p = evidenceObjectUrl(this.session.requireClient(), nameWithOwner, path, type);
       p.catch(() => this.urls.delete(key));
       this.urls.set(key, p);
     }
@@ -98,7 +98,7 @@ export class EvidenceThumb {
     if (!repo || this.url() || this.loading()) return;
     this.loading.set(true);
     try {
-      this.url.set(await this.cache.get(repo.nameWithOwner, this.ref().path));
+      this.url.set(await this.cache.get(repo.nameWithOwner, this.ref().path, this.ref().type));
     } catch {
       this.failed.set(true);
     } finally {

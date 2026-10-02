@@ -30,6 +30,12 @@ function check(cond: unknown, what: string): void {
   }
 }
 
+/** Picks an item from a case page's More menu. */
+async function more(page: Page, item: string | RegExp): Promise<void> {
+  await page.locator('details.menu > summary').click();
+  await page.getByRole('menuitem', { name: item }).click();
+}
+
 /** Waits up to 5 s for a locator to match exactly n elements. */
 async function countIs(l: Locator, n: number): Promise<boolean> {
   for (let i = 0; i < 50; i++) {
@@ -333,15 +339,16 @@ try {
     await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/2`);
     check(await shows(page.getByText('sam-android requested changes')), 'change request highlighted');
     await page.screenshot({ path: join(SHOTS, '11-detail-changes.png'), fullPage: true });
-    await page.getByRole('link', { name: 'Edit' }).click();
+    await page.getByRole('link', { name: 'Edit and resubmit' }).click();
+    check(await shows(page.getByText('sam-android asked for changes')), 'editor shows the change request (UX 6)');
     await page.getByLabel('Step 3 text').fill('"Card expired" shows under the card field');
     await page.getByLabel('Step 3 text').press('Enter');
     await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Step 4 text');
     await page.keyboard.type('the Pay button stays disabled');
-    await page.getByRole('button', { name: 'Save changes' }).click();
+    await page.getByRole('button', { name: 'Save only' }).click();
     await page.waitForURL(/\/cases\/2(\?|$)/);
-    check(gh.issue(2).labels.includes('status:changes-requested'), 'edit alone keeps it waiting for resubmit');
-    await page.getByRole('button', { name: 'Resubmit for review' }).click();
+    check(gh.issue(2).labels.includes('status:changes-requested'), 'Save only keeps it waiting for resubmit');
+    await more(page, 'Resubmit without changes');
     check(await shows(page.getByRole('dialog').getByRole('checkbox', { name: /sam-android/, checked: true })), 'suggested reviewer pre-selected');
     await page.screenshot({ path: join(SHOTS, '12-resubmit-dialog.png') });
     await page.getByRole('dialog').getByRole('button', { name: 'Submit' }).click();
@@ -352,7 +359,7 @@ try {
 
     // Close as won't test, then reopen.
     await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/3`);
-    await page.getByRole('button', { name: "Close as won't test" }).click();
+    await more(page, "Close as won't test");
     await page.getByLabel('Reason (optional)').fill('Moved to the next release');
     await page.getByRole('button', { name: 'Close case' }).click();
     await page.getByRole('button', { name: 'Reopen' }).waitFor();
@@ -362,7 +369,7 @@ try {
     check(gh.issue(3).state === 'OPEN' && gh.issue(3).labels.includes('status:draft'), 'reopened as Draft');
 
     // Duplicate prefills the editor; leaving asks to discard.
-    await page.getByRole('button', { name: 'Duplicate' }).click();
+    await more(page, 'Duplicate');
     await page.waitForURL(/\/cases\/new/);
     check((await page.getByLabel('Scenario name').inputValue()) === 'Cart persists after restart (copy)', 'duplicate prefills');
     await page.getByRole('link', { name: 'Cancel' }).click();
@@ -538,7 +545,7 @@ Scenario: Order history shows the new order
     await page.screenshot({ path: join(SHOTS, '16-suggestion-applied.png'), fullPage: true });
 
     await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/1`);
-    await page.getByRole('button', { name: 'change' }).click();
+    await more(page, 'Change assignees');
     await page.getByLabel('Runs on Android').selectOption('sam-android');
     await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
@@ -587,10 +594,12 @@ Scenario: Order history shows the new order
 
     // Run form on the case page (EX-1 to EX-5).
     await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/4`);
-    await page.getByText('Runs can be recorded once the case is approved.').waitFor();
-    check(true, 'no runs before approval (EX-7)');
+    await page.getByRole('heading', { name: /Still in review/ }).waitFor();
+    await page.waitForTimeout(300);
+    check((await page.locator('app-runs-section').count()) === 0, 'no runs section before approval (EX-7, UX 5)');
     await page.goto(`${BASE}/r/acme/shop-app-testbank/cases/1`);
-    await page.getByRole('button', { name: 'Record a run' }).click();
+    check(await shows(page.getByRole('button', { name: 'Record run on Android' })), 'next step for an Android runner (UX 4)');
+    await page.getByRole('button', { name: 'Record Android run' }).click();
     check((await page.getByLabel('App version').inputValue()) === '4.12.0', 'version prefilled with the target');
     await page.getByLabel('Build number').fill('41207');
     await page.getByLabel('Device').fill('Pixel 8');
@@ -657,6 +666,7 @@ Scenario: Order history shows the new order
     await page.waitForURL(/\/repos/);
     await page.goto(`${BASE}/r/acme/shop-app-testbank/cases`);
     await page.locator('table.cases tbody tr').first().waitFor();
+    await page.getByRole('button', { name: 'Select to assign runners' }).click();
     await page.getByLabel('Select all runnable cases').check();
     check(await shows(page.getByText('3 selected')), 'only runnable cases selectable');
     await page.getByLabel('Android runner').selectOption('sam-android');
@@ -764,7 +774,7 @@ Scenario: Order history shows the new order
     page.on('dialog', (d) => void d.accept());
 
     await page.goto(`${BASE}/connect`);
-    await page.getByRole('button', { name: 'Try as product manager' }).click();
+    await page.getByRole('button', { name: 'Try as PM' }).click();
     await page.waitForURL(/\/cases/);
     const rows = page.locator('table.cases tbody tr');
     check(await countIs(rows, 9), 'sample feature loads with 9 cases (NV-3)');
@@ -780,6 +790,18 @@ Scenario: Order history shows the new order
     check(true, 'Cmd-K jumps to a case');
     check(await shows(page.locator('app-evidence-thumb img[src^="blob:"]')), 'sample evidence renders');
     check(await shows(page.getByRole('link', { name: 'acme/shop-app#212' })), 'sample bug link');
+    check(await shows(page.locator('app-evidence-thumb img[src^="blob:"]')), 'sample screenshots draw (UX 1)');
+
+    // Fix a change request in one go (UX 6).
+    await page.keyboard.press('ControlOrMeta+k');
+    await page.getByPlaceholder('Jump to a test case, feature or action…').fill('expired');
+    await page.keyboard.press('Enter');
+    await page.getByRole('link', { name: 'Edit and resubmit' }).click();
+    check(await shows(page.getByText('jo-ios asked for changes')), 'reviewer request shown while editing');
+    await page.getByLabel('Step 3 text').fill('"Card expired" shows under the card number field');
+    await page.getByRole('button', { name: 'Save and resubmit' }).click();
+    check(await shows(page.getByText('Saved and resubmitted to jo-ios.')), 'saved and resubmitted to the reviewer who asked');
+    check(await shows(page.locator('app-stepper li[aria-current="step"]', { hasText: 'In review' })), 'stepper shows In review (UX 5)');
 
     // Regression bank (RB-1 to RB-5).
     await page.keyboard.press('ControlOrMeta+k');
@@ -798,8 +820,8 @@ Scenario: Order history shows the new order
     check(await shows(copyRow.getByText('Approved')), 'copy of an approved case is ready to run (RB-4)');
 
     await rows.filter({ hasText: 'Cart persists' }).getByRole('link').click();
-    await page.getByRole('button', { name: 'Add to regression bank' }).click();
-    check(await shows(page.getByRole('button', { name: 'Remove from regression bank' })), 'mark as regression (RB-1)');
+    await more(page, 'Add to regression bank');
+    check(await shows(page.getByText('Added to the regression bank.')), 'mark as regression, with a confirmation (RB-1, UX 9)');
 
     // Edit a bank original, then see its copy flagged and update it (RB-5). Sample data
     // lives in memory, so everything below navigates inside the app (no reloads).

@@ -5,6 +5,7 @@ import { map } from 'rxjs';
 import { Workspace, asGitHubError } from '../../core/workspace';
 import { canRun } from '../../core/testcase/runs';
 import { BankStore } from '../../core/testcase/bank-store';
+import { Toasts } from '../../core/toast';
 import { copyInfo, isOutOfDate } from '../../core/testcase/bank';
 import { FeatureSelection } from '../../core/feature-selection';
 import { CasesStore } from '../../core/testcase/cases-store';
@@ -29,7 +30,7 @@ interface Filters {
   imports: [RouterLink, PriorityBadge, StatusBadge, PlatformBadges, Avatars],
   template: `
     <main class="page stack">
-      <div class="row">
+      <div class="row head">
         <div class="stack" style="gap: 2px">
           <h1>Test cases</h1>
           @if (features.project(); as p) {
@@ -118,10 +119,17 @@ interface Filters {
             </div>
           }
           @default {
+            <div class="counts-row">
             <div class="counts" aria-label="Counts by status">
               @for (c of statusCounts(); track c.status) {
                 <button type="button" class="count" [class.on]="filters().status === c.status" (click)="toggleStatus(c.status)">
                   <strong>{{ c.count }}</strong> {{ statusLabels[c.status] }}
+                </button>
+              }
+            </div>
+              @if (canBulk() && anyRunnable()) {
+                <button class="btn btn-link small" type="button" (click)="toggleSelecting()">
+                  {{ selecting() ? 'Done selecting' : 'Select to assign runners' }}
                 </button>
               }
             </div>
@@ -172,7 +180,7 @@ interface Filters {
               <table class="cases card">
                 <thead>
                   <tr>
-                    @if (canBulk()) {
+                    @if (selecting()) {
                       <th scope="col" class="sel">
                         <input type="checkbox" aria-label="Select all runnable cases" [checked]="allSelected()" (change)="toggleAll()" />
                       </th>
@@ -188,16 +196,18 @@ interface Filters {
                 </thead>
                 <tbody>
                   @for (tc of shown(); track tc.number) {
-                    <tr>
-                      @if (canBulk()) {
+                    <tr class="click" (click)="openRow($event, tc.number)">
+                      @if (selecting()) {
                         <td class="sel">
                           @if (runnable(tc)) {
                             <input type="checkbox" [attr.aria-label]="'Select #' + tc.number" [checked]="selected().has(tc.number)" (change)="toggleSelect(tc.number)" />
+                          } @else {
+                            <span class="muted small" title="Only approved cases have runners">–</span>
                           }
                         </td>
                       }
                       <td class="num muted">{{ tc.number }}</td>
-                      <td>
+                      <td class="tc">
                         <a class="title" [routerLink]="[tc.number]" queryParamsHandling="preserve">{{ tc.title }}</a>
                         @if (tc.regression) {
                           <span class="badge badge-outline small">regression</span>
@@ -233,7 +243,22 @@ interface Filters {
     .seg button { border: none; background: var(--surface); color: var(--text-2); font: inherit; font-weight: 600; padding: 0 10px; height: 34px; cursor: pointer; }
     .seg button + button { border-left: 1px solid var(--border); }
     .seg button.on { background: var(--accent-soft); color: var(--accent); }
+    .counts-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
     .counts { display: flex; flex-wrap: wrap; gap: 6px; }
+    tr.click { cursor: pointer; }
+    .head { flex-wrap: wrap; row-gap: 12px; }
+    /* Phones: each row becomes a card, the title on its own line, the badges below it. */
+    @media (max-width: 720px) {
+      .cases thead { display: none; }
+      .cases, .cases tbody { display: block; }
+      .cases tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+      .cases tr:last-child { border-bottom: none; }
+      .cases tr td { display: block; padding: 0; border: none; }
+      .cases tr td.sel { order: -2; }
+      .cases tr td.num { order: -1; width: auto; }
+      .cases tr td.tc { flex: 1 1 calc(100% - 60px); }
+      .cases tr td.upd { margin-left: auto; }
+    }
     .count { border: 1px solid var(--border); background: var(--surface); color: var(--text-2); border-radius: 16px; padding: 3px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
     .count.on { border-color: var(--accent); color: var(--accent); }
     .count strong { color: var(--text); }
@@ -317,6 +342,20 @@ export class CasesListPage {
     { id: 'ios', name: 'iOS' },
   ];
   protected readonly canBulk = computed(() => this.ws.canWriteRepo() && !this.ws.isViewerOnly());
+  protected readonly selecting = signal(false);
+  protected readonly anyRunnable = computed(() => this.shown().some(canRun));
+
+  protected toggleSelecting(): void {
+    this.selecting.update((v) => !v);
+    if (!this.selecting()) this.selected.set(new Set());
+  }
+
+  /** The whole row opens the case, except clicks on controls inside it. */
+  protected openRow(e: MouseEvent, n: number): void {
+    if ((e.target as HTMLElement).closest('a, button, input, label')) return;
+    if (window.getSelection()?.toString()) return; // selecting text, not opening
+    void this.router.navigate([n], { relativeTo: this.route, queryParamsHandling: 'preserve' });
+  }
   protected readonly runnable = (tc: TestCase) => canRun(tc);
   protected readonly allSelected = computed(() => {
     const r = this.shown().filter(canRun);
@@ -355,7 +394,9 @@ export class CasesListPage {
     this.bulkError.set(null);
     try {
       await this.store.assignRunners(cases, this.bulkPick(), (d) => this.bulkDone.set(d));
+      this.toasts.show(`Runners assigned for ${cases.length} case${cases.length === 1 ? '' : 's'}.`);
       this.selected.set(new Set());
+      this.selecting.set(false);
     } catch (e) {
       this.bulkError.set(`Stopped after ${this.bulkDone()} of ${cases.length}: ${asGitHubError(e).message}`);
     } finally {
@@ -364,6 +405,7 @@ export class CasesListPage {
   }
 
   private readonly bank = inject(BankStore);
+  private readonly toasts = inject(Toasts);
   /** Copies whose bank original has changed since (RB-5). */
   protected readonly outdated = computed(() => {
     const bank = this.bank.bankCases();

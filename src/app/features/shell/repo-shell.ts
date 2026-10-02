@@ -200,6 +200,14 @@ import { avatarAt } from '../../core/avatar';
     @media (max-width: 1100px) {
       .who span { display: none; }
     }
+    /* Phones: brand and controls on one row, the nav scrolls sideways underneath. */
+    @media (max-width: 760px) {
+      .top-inner { flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px 10px; }
+      .nav { order: 3; width: 100%; margin-left: 0; overflow-x: auto; scrollbar-width: none; }
+      .jump { display: none; }
+      .feature select { max-width: 150px; }
+      .banners { padding: 0 12px; }
+    }
     .feature select {
       height: 32px;
       max-width: 220px;
@@ -213,7 +221,7 @@ import { avatarAt } from '../../core/avatar';
     .sample-banner { align-items: center; background: var(--accent-soft); border-color: var(--accent); }
     .sample-banner select { width: auto; height: 28px; }
     .banners {
-      max-width: 960px;
+      max-width: 1080px;
       margin: 0 auto;
       padding: 0 24px;
       display: flex;

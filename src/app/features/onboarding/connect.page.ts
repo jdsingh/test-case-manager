@@ -7,7 +7,7 @@ import { lastRepoUrl } from '../../core/last-repo';
 
 /** Kept here (not imported from the demo module) so the demo code loads only when used. */
 const DEMO_PEOPLE_LIST = [
-  { login: 'priya-pm', label: 'Product manager' },
+  { login: 'priya-pm', label: 'PM' },
   { login: 'sam-android', label: 'Android engineer' },
   { login: 'jo-ios', label: 'iOS engineer' },
   { login: 'alex-lead', label: 'Tech lead' },
@@ -29,6 +29,7 @@ const FINE_GRAINED_URL = 'https://github.com/settings/personal-access-tokens/new
     <main class="page-narrow stack">
       <div class="stack" style="gap: 6px">
         <h1>Connect to GitHub</h1>
+        <p class="small"><a href="#sample" (click)="jumpToSample($event)">New here? Try it with sample data first ↓</a></p>
         <p class="muted">
           Test Case Manager keeps everything in GitHub Issues. It needs a personal access token to
           read and write them for you. The token stays in this browser and is only sent to GitHub.
@@ -92,7 +93,7 @@ const FINE_GRAINED_URL = 'https://github.com/settings/personal-access-tokens/new
         </div>
       </form>
 
-      <section class="card stack sample">
+      <section class="card stack sample" id="sample" tabindex="-1">
         <h2>Just looking? Try it with sample data</h2>
         <p class="muted small">
           A sample feature with test cases in every state, runs with screenshots, a failed run with a bug and a review
@@ -101,7 +102,7 @@ const FINE_GRAINED_URL = 'https://github.com/settings/personal-access-tokens/new
         <div class="row wrap">
           @for (p of people; track p.login) {
             <button class="btn" type="button" (click)="tryDemo(p.login)" [disabled]="busy()">
-              Try as {{ p.label.toLowerCase() }}
+              Try as {{ p.label }}
             </button>
           }
         </div>
@@ -122,6 +123,13 @@ export class ConnectPage {
   protected readonly error = signal<string | null>(null);
 
   protected readonly people = DEMO_PEOPLE_LIST;
+
+  protected jumpToSample(e: Event): void {
+    e.preventDefault(); // the app's <base href> would otherwise turn "#sample" into a new page
+    const el = document.getElementById('sample');
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el?.focus({ preventScroll: true });
+  }
 
   protected async tryDemo(login: string): Promise<void> {
     this.busy.set(true);

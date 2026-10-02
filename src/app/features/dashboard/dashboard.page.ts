@@ -40,7 +40,7 @@ interface Problem {
   selector: 'app-dashboard-page',
   imports: [RouterLink, PriorityBadge, EvidenceThumb, PlatformBar, BurndownChart],
   template: `
-    <main class="page stack wide">
+    <main class="page stack">
       <div class="row wrap">
         <div class="stack" style="gap: 2px">
           <h1>{{ features.project()?.title ?? 'Dashboard' }}</h1>
@@ -109,6 +109,7 @@ interface Problem {
 
         <section class="card stack">
           <h2 class="h-small">Test cases by priority and status</h2>
+          <div class="scroll-x">
           <table class="grid-table">
             <thead>
               <tr>
@@ -135,6 +136,7 @@ interface Problem {
               }
             </tbody>
           </table>
+          </div>
         </section>
 
         <section class="card stack">
@@ -178,16 +180,23 @@ interface Problem {
           @if (loadingComments()) {
             <div class="row muted small"><span class="spinner" aria-hidden="true"></span> Loading…</div>
           } @else if (changes().length) {
-            <ul class="changes">
-              @for (c of changes().slice(0, 30); track c.at + c.caseNumber + c.kind) {
-                <li>
-                  <span [class]="'dot k-' + c.kind" aria-hidden="true"></span>
-                  <strong>{{ c.who }}</strong> {{ c.text }}
-                  <a [routerLink]="['../cases', c.caseNumber]" queryParamsHandling="preserve">#{{ c.caseNumber }} {{ c.caseTitle }}</a>
-                  <span class="muted small">&nbsp;· {{ ago(c.at) }}</span>
-                </li>
-              }
-            </ul>
+            @for (g of changeGroups(); track g.day) {
+              <h3 class="day">{{ g.day }}</h3>
+              <ul class="changes">
+                @for (c of g.items; track c.at + c.caseNumber + c.kind) {
+                  <li>
+                    <span [class]="'dot k-' + c.kind" aria-hidden="true"></span>
+                    <strong>{{ c.who }}</strong> {{ c.text }}
+                    <a [routerLink]="['../cases', c.caseNumber]" queryParamsHandling="preserve">#{{ c.caseNumber }} {{ c.caseTitle }}</a>
+                  </li>
+                }
+              </ul>
+            }
+            @if (changes().length > shownChanges()) {
+              <button class="btn btn-link small" type="button" (click)="shownChanges.set(changes().length)">
+                Show all {{ changes().length }}
+              </button>
+            }
           } @else {
             <p class="muted small">No reviews, runs or bugs since then.</p>
           }
@@ -199,7 +208,6 @@ interface Problem {
     </main>
   `,
   styles: `
-    .wide { max-width: 1120px; }
     .wrap { flex-wrap: wrap; }
     .settings { gap: 12px; align-items: flex-end; }
     .settings input { width: 160px; }
@@ -214,7 +222,8 @@ interface Problem {
     .headline { font-size: 20px; }
     .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 16px; }
     @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
-    .grid-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .scroll-x { overflow-x: auto; }
+    .grid-table { min-width: 640px; width: 100%; border-collapse: collapse; font-size: 13px; }
     .grid-table th, .grid-table td { padding: 6px 8px; text-align: center; border-bottom: 1px solid var(--border); }
     .grid-table th:first-child { text-align: left; }
     .grid-table thead th { color: var(--text-2); font-weight: 600; font-size: 12px; }
@@ -231,6 +240,7 @@ interface Problem {
     .res-fail { background: var(--bad-soft); color: var(--bad); }
     .res-blocked { background: var(--warn-soft); color: var(--warn); }
     .changes { gap: 6px; font-size: 13.5px; }
+    .day { font-size: 12px; font-weight: 600; color: var(--text-2); margin-top: 4px; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--text-2); }
     .k-pass, .k-approved { background: var(--good); }
     .k-fail, .k-changes { background: var(--bad); }
@@ -275,6 +285,26 @@ export class DashboardPage {
     this.loadingComments() ? null : burndown(this.store.cases(), this.comments(), this.target(), this.release(), new Date().toISOString().slice(0, 10)),
   );
   protected readonly changes = computed(() => changesSince(this.store.cases(), this.comments(), this.seenBefore()));
+  protected readonly shownChanges = signal(10);
+  /** UX 12: newest first, grouped by day (Today, Yesterday, then dates). */
+  protected readonly changeGroups = computed(() => {
+    const groups: { day: string; items: ReturnType<typeof changesSince> }[] = [];
+    const label = (iso: string) => {
+      const d = new Date(iso);
+      const today = new Date();
+      const yesterday = new Date(Date.now() - 864e5);
+      if (d.toDateString() === today.toDateString()) return 'Today';
+      if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+      return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    };
+    for (const c of this.changes().slice(0, this.shownChanges())) {
+      const day = label(c.at);
+      const g = groups.at(-1);
+      if (g && g.day === day) g.items.push(c);
+      else groups.push({ day, items: [c] });
+    }
+    return groups;
+  });
 
   protected readonly problems = computed<Problem[]>(() => {
     const out: Problem[] = [];

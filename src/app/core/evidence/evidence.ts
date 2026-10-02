@@ -131,9 +131,11 @@ export async function uploadEvidence(
 }
 
 /** Loads an evidence file through the API (works for private repos) as an object URL. */
-export async function evidenceObjectUrl(gh: GitHubClient, nameWithOwner: string, path: string): Promise<string> {
+export async function evidenceObjectUrl(gh: GitHubClient, nameWithOwner: string, path: string, type = ''): Promise<string> {
   const encoded = path.split('/').map(encodeURIComponent).join('/');
-  const blob = await gh.restBlob(`${repoPath(nameWithOwner)}/contents/${encoded}?ref=${EVIDENCE_BRANCH}`);
+  const raw = await gh.restBlob(`${repoPath(nameWithOwner)}/contents/${encoded}?ref=${EVIDENCE_BRANCH}`);
+  // The API answers with a generic type; browsers won't draw some images (SVG, HEIC) without the real one.
+  const blob = type ? new Blob([raw], { type }) : raw;
   return URL.createObjectURL(blob);
 }
 

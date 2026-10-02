@@ -103,7 +103,7 @@ code {
 }
 
 .page {
-  max-width: 960px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 32px 24px 64px;
 }
@@ -159,6 +159,9 @@ code {
   background: var(--accent);
   filter: brightness(1.08);
 }
+.btn.small {
+  font-size: 12.5px;
+}
 .btn-link {
   border: none;
   background: none;
@@ -205,6 +208,7 @@ select:focus {
 
 .banner {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: flex-start;
   padding: 10px 14px;
@@ -335,4 +339,17 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-
   font: 11px/16px var(--mono);
   text-align: center;
   color: var(--text-2);
+}
+
+/* Phones */
+@media (max-width: 760px) {
+  .page {
+    padding: 20px 14px 48px;
+  }
+  .page-narrow {
+    padding: 28px 14px;
+  }
+  h1 {
+    font-size: 20px;
+  }
 }

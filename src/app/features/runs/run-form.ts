@@ -10,6 +10,7 @@ import { loadRunDefaults, saveRunDefaults } from '../../core/testcase/run-defaul
 import { prepareFiles } from '../../core/evidence/prepare';
 import { bugBody, bugTitle } from '../../core/testcase/bug-report';
 import { EvidencePicker } from './evidence-picker';
+import { Toasts } from '../../core/toast';
 
 /** Record a run with metadata and evidence (EX-1 to EX-5); offer a bug on Fail (EX-6). */
 @Component({
@@ -144,8 +145,11 @@ export class RunForm {
   private readonly ws = inject(Workspace);
   private readonly session = inject(Session);
   private readonly features = inject(FeatureSelection);
+  private readonly toasts = inject(Toasts);
 
   readonly tc = input.required<TestCase>();
+  /** Platform to start on; defaults to the user's own. */
+  readonly platform$ = input<Platform | null>(null, { alias: 'platform' });
   readonly recorded = output<RunEvent | null>();
   readonly done = output<void>();
   readonly cancelled = output<void>();
@@ -186,10 +190,11 @@ export class RunForm {
     // Default to the platform the user works on, then fill in what they used last time.
     effect(() => {
       const tc = this.tc();
+      this.platform$();
       untracked(() => {
         const config = this.ws.config();
         const mine = tc.platforms.find((p) => config && includesLogin(config.team[p], this.me()));
-        this.setPlatform(mine ?? tc.platforms[0] ?? 'android');
+        this.setPlatform(this.platform$() ?? mine ?? tc.platforms[0] ?? 'android');
       });
     });
   }
@@ -230,6 +235,7 @@ export class RunForm {
       saveRunDefaults(meta.platform, { appVersion: meta.appVersion, build: meta.build, device: meta.device, os: meta.os, env: meta.env });
       const { run } = await this.store.recordRun(tc, meta, this.notes(), prepared.uploads, (s) => this.stage.set(s));
       this.recorded.emit(run);
+      this.toasts.show(`${RESULT_LABELS[meta.result]} run recorded on ${PLATFORM_NAMES[meta.platform]}.`);
       if (meta.result === 'pass') {
         this.done.emit();
       } else {
@@ -248,7 +254,8 @@ export class RunForm {
     this.busy.set(true);
     this.error.set(null);
     try {
-      await this.store.fileBug(this.tc(), this.platform(), this.bugTitle().trim(), this.bugText());
+      const link = await this.store.fileBug(this.tc(), this.platform(), this.bugTitle().trim(), this.bugText());
+      this.toasts.show(`Bug filed: ${link.issue}.`, 'good', { url: link.url, label: 'Open' });
       this.done.emit();
     } catch (e) {
       this.error.set(asGitHubError(e).message);

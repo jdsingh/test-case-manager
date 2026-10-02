@@ -7,7 +7,8 @@ import { CasesStore } from '../../core/testcase/cases-store';
 import { RunQueue } from '../../core/testcase/run-queue';
 import { Platform, includesLogin } from '../../core/config/team-config';
 import { PLATFORM_NAMES, TestCase } from '../../core/testcase/model';
-import { Environment, RunMeta, RunResult, canRun } from '../../core/testcase/runs';
+import { Environment, RunEvent, RunMeta, RunResult, canRun, runsOf } from '../../core/testcase/runs';
+import { timeAgo } from '../../core/time';
 import { loadRunDefaults, saveRunDefaults } from '../../core/testcase/run-defaults';
 import { bugBody, bugTitle } from '../../core/testcase/bug-report';
 import { asGitHubError } from '../../core/workspace';
@@ -114,6 +115,17 @@ const KEY = 'tcm.session';
               <h1 class="case-title">{{ tc.title }}</h1>
               @if (tc.preconditions) {
                 <p class="pre"><span class="muted">Before you start:</span> {{ tc.preconditions }}</p>
+              }
+              @if (lastRun(); as lr) {
+                <div [class]="'banner small ' + (lr.result === 'fail' ? 'banner-bad' : 'banner-warn')" role="note">
+                  <div>
+                    <strong>Last run on {{ names[lr.platform] }}: {{ lr.result === 'fail' ? 'failed' : 'blocked' }}</strong>
+                    <span class="muted"> · v{{ lr.appVersion }}{{ lr.build ? ' (' + lr.build + ')' : '' }} · {{ lr.author }} · {{ ago(lr.executedAt) }}</span>
+                    @if (lr.notes) {
+                      <div>{{ lr.notes }}</div>
+                    }
+                  </div>
+                </div>
               }
               <ol class="steps">
                 @for (s of tc.steps; track $index; let i = $index) {
@@ -283,8 +295,25 @@ export class SessionPage {
     return i;
   });
 
+  /** The previous failed or blocked run of the current case on this platform (UX 8). */
+  protected readonly lastRun = signal<RunEvent | null>(null);
+  protected readonly ago = (iso: string) => timeAgo(iso);
+
   constructor() {
     this.pickPlatform(this.platforms[0]);
+    effect(() => {
+      const tc = this.current();
+      const platform = this.setup()?.platform;
+      untracked(() => {
+        this.lastRun.set(null);
+        if (!tc || !platform || !tc.labels.some((l) => l === `run:${platform}:failed` || l === `run:${platform}:blocked`)) return;
+        void this.store.detail(tc.number).then(({ comments }) => {
+          if (this.current()?.number !== tc.number) return;
+          const last = runsOf(comments).filter((r) => r.platform === platform).at(-1) ?? null;
+          this.lastRun.set(last && last.result !== 'pass' ? last : null);
+        });
+      });
+    });
     // A fresh case starts with no ticks, notes or files.
     effect(() => {
       this.current();

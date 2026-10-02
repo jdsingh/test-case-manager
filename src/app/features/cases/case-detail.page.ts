@@ -1,4 +1,4 @@
-import { Component, ElementRef, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
+import { Component, ElementRef, HostListener, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
@@ -13,6 +13,10 @@ import { avatarAt } from '../../core/avatar';
 import { Avatars, PlatformBadges, PriorityBadge, StatusBadge } from './badges';
 import { StepNotes } from '../review/step-notes';
 import { RunsSection } from '../runs/runs-section';
+import { Stepper } from './stepper';
+import { Toasts } from '../../core/toast';
+import { canRun, runsOf } from '../../core/testcase/runs';
+import { canReview } from '../../core/testcase/review';
 import { ReviewPanel } from '../review/review-panel';
 import { historyOf } from '../../core/testcase/review';
 import { BankStore } from '../../core/testcase/bank-store';
@@ -36,7 +40,7 @@ interface ActivityItem {
 /** One test case: scenario, state, actions and its review history. */
 @Component({
   selector: 'app-case-detail-page',
-  imports: [RouterLink, StepNotes, ReviewPanel, RunsSection, PriorityBadge, StatusBadge, PlatformBadges, Avatars],
+  imports: [RouterLink, StepNotes, ReviewPanel, RunsSection, Stepper, PriorityBadge, StatusBadge, PlatformBadges, Avatars],
   template: `
     <main class="page stack">
       <a class="small back" routerLink=".." queryParamsHandling="preserve">← Test cases</a>
@@ -64,37 +68,61 @@ interface ActivityItem {
             } @else {
               <span class="muted small">Unassigned</span>
             }
-            @if (ws.canWriteRepo() && !tc.closed && !ws.isViewerOnly()) {
-              <button class="btn btn-link small" type="button" (click)="openAssign(tc)">change</button>
-            }
             <span class="muted small">· updated {{ ago(tc.updatedAt) }}</span>
           </div>
         </header>
 
-        @if (ws.canWriteRepo()) {
+        <app-stepper [tc]="tc" />
+
+        @if (ws.canWriteRepo() && !ws.isViewerOnly()) {
           <div class="row wrap actions">
-            @if (!tc.closed) {
-              <a class="btn" routerLink="edit" queryParamsHandling="preserve">Edit</a>
-              @if (tc.status === 'draft' || tc.status === 'changes-requested' || tc.status === null) {
-                <button class="btn btn-primary" type="button" (click)="openSubmit()" [disabled]="busy()">
-                  {{ tc.status === 'changes-requested' ? 'Resubmit for review' : 'Submit for review' }}
+            @switch (next()?.kind) {
+              @case ('submit') {
+                <button class="btn btn-primary" type="button" (click)="openSubmit()" [disabled]="busy()">Submit for review</button>
+              }
+              @case ('fix') {
+                <a class="btn btn-primary" routerLink="edit" queryParamsHandling="preserve">Edit and resubmit</a>
+              }
+              @case ('review') {
+                <button class="btn btn-primary" type="button" (click)="scrollToReview()">Review this case</button>
+              }
+              @case ('run') {
+                <button class="btn btn-primary" type="button" (click)="runs()?.openFor(next()!.platform!)">
+                  {{ next()!.label }}
                 </button>
               }
-              <button class="btn" type="button" (click)="duplicate(tc)">Duplicate</button>
-              @if (!copy()) {
-                <button class="btn" type="button" (click)="toggleRegression(tc)" [disabled]="busy()">
-                  {{ tc.regression ? 'Remove from regression bank' : 'Add to regression bank' }}
-                </button>
+              @case ('reopen') {
+                <button class="btn btn-primary" type="button" (click)="reopen(tc)" [disabled]="busy()">Reopen</button>
               }
-              <button class="btn" type="button" (click)="closeDialog.showModal()" [disabled]="busy()">
-                Close as won't test
-              </button>
-            } @else {
-              <button class="btn" type="button" (click)="reopen(tc)" [disabled]="busy()">Reopen</button>
             }
-            <span class="spacer"></span>
-            <a class="small" [href]="tc.url" target="_blank" rel="noopener">Open in GitHub</a>
+            @if (!tc.closed && next()?.kind !== 'fix') {
+              <a class="btn" routerLink="edit" queryParamsHandling="preserve">Edit</a>
+            }
+            <details class="menu" #more (keydown.escape)="more.open = false">
+              <summary class="btn">More <span aria-hidden="true">▾</span></summary>
+              <div class="menu-list" role="menu" (click)="more.open = false">
+                @if (tc.status === 'changes-requested' && !tc.closed) {
+                  <button role="menuitem" type="button" (click)="openSubmit()">Resubmit without changes</button>
+                }
+                @if (!tc.closed) {
+                  <button role="menuitem" type="button" (click)="duplicate(tc)">Duplicate</button>
+                  @if (!copy()) {
+                    <button role="menuitem" type="button" (click)="toggleRegression(tc)">
+                      {{ tc.regression ? 'Remove from regression bank' : 'Add to regression bank' }}
+                    </button>
+                  }
+                  <button role="menuitem" type="button" (click)="openAssign(tc)">Change assignees</button>
+                  <button role="menuitem" type="button" class="danger" (click)="closeDialog.showModal()">Close as won't test</button>
+                }
+                <a role="menuitem" [href]="tc.url" target="_blank" rel="noopener">Open in GitHub ↗</a>
+              </div>
+            </details>
+            @if (next()?.hint) {
+              <span class="muted small">{{ next()!.hint }}</span>
+            }
           </div>
+        } @else {
+          <div class="row actions"><a class="small" [href]="tc.url" target="_blank" rel="noopener">Open in GitHub</a></div>
         }
 
         @if (copy(); as cp) {
@@ -114,7 +142,9 @@ interface ActivityItem {
         }
 
         @if (tc.status === 'in-review') {
-          <app-review-panel [tc]="tc" [history]="history()" [showReason]="true" (decided)="reload()" />
+          <div id="review-panel">
+            <app-review-panel [tc]="tc" [history]="history()" [showReason]="true" (decided)="onReviewed($event)" />
+          </div>
         }
 
         @if (changeRequest(); as cr) {
@@ -153,7 +183,9 @@ interface ActivityItem {
           </section>
         }
 
-        <app-runs-section [tc]="tc" [comments]="comments()" (changed)="reload()" />
+        @if (showRuns()) {
+          <app-runs-section [tc]="tc" [comments]="comments()" (changed)="reload()" />
+        }
 
         <section class="stack" style="gap: 8px">
           <h2 class="h-small">Activity</h2>
@@ -282,6 +314,13 @@ interface ActivityItem {
     .wrap { flex-wrap: wrap; }
     .sep { margin: 0 2px; }
     .actions { padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .menu { position: relative; }
+    .menu > summary { list-style: none; }
+    .menu > summary::-webkit-details-marker { display: none; }
+    .menu-list { position: absolute; z-index: 6; top: 40px; left: 0; min-width: 230px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); display: flex; flex-direction: column; }
+    .menu-list > button, .menu-list > a { text-align: left; border: none; background: none; color: var(--text); font: inherit; padding: 8px 10px; border-radius: 6px; cursor: pointer; text-decoration: none; }
+    .menu-list > button:hover, .menu-list > a:hover { background: var(--surface-2); }
+    .menu-list .danger { color: var(--bad); }
     .h-small { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); }
     .notes, .rest, .cr { white-space: pre-wrap; }
     .cr { margin-top: 4px; }
@@ -315,6 +354,40 @@ export class CaseDetailPage {
 
   protected readonly tc = computed(() => this.store.byNumber(this.number()));
   protected readonly history = computed(() => historyOf(this.comments()));
+  private readonly toasts = inject(Toasts);
+  protected readonly runs = viewChild(RunsSection);
+
+  protected readonly showRuns = computed(() => {
+    const tc = this.tc();
+    return !!tc && (canRun(tc) || runsOf(this.comments()).length > 0);
+  });
+
+  /**
+   * The one thing this person should most likely do next (UX 4), from the case's state
+   * and their role.
+   */
+  protected readonly next = computed<{ kind: 'submit' | 'fix' | 'review' | 'run' | 'reopen'; label?: string; platform?: Platform; hint?: string } | null>(() => {
+    const tc = this.tc();
+    const config = this.ws.config();
+    const me = this.session.viewer()?.login ?? '';
+    if (!tc || !this.ws.canWriteRepo()) return null;
+    if (tc.closed) return { kind: 'reopen' };
+    if (tc.status === 'draft' || tc.status === null) return { kind: 'submit' };
+    if (tc.status === 'changes-requested') return { kind: 'fix', hint: 'Address the request below, then resubmit.' };
+    if (tc.status === 'in-review') {
+      const check = canReview(tc, this.history(), config, me);
+      return check.ok ? { kind: 'review' } : null;
+    }
+    if (canRun(tc) && config) {
+      const mine = tc.platforms.filter((p) => includesLogin(config.team[p], me));
+      const todo = mine.find((p) => !tc.labels.includes(`run:${p}:passed`));
+      if (todo) {
+        const failed = tc.labels.some((l) => l === `run:${todo}:failed` || l === `run:${todo}:blocked`);
+        return { kind: 'run', platform: todo, label: `${failed ? 'Re-run' : 'Record run'} on ${PLATFORM_NAMES[todo]}` };
+      }
+    }
+    return null;
+  });
   private readonly bank = inject(BankStore);
   protected readonly copy = computed(() => {
     const tc = this.tc();
@@ -442,18 +515,40 @@ export class CaseDetailPage {
       ? Object.values(this.slotPick()).filter((l): l is string => !!l)
       : this.assignPick();
     const unique = logins.filter((l, i) => logins.findIndex((x) => sameLogin(x, l)) === i);
-    await this.act(async () => {
+    const ok = await this.act(async () => {
       await this.store.assign(tc, unique);
       this.assignDialogRef()?.nativeElement.close();
     });
+    if (ok) this.toasts.show(unique.length ? `Assigned to ${unique.join(', ')}.` : 'Unassigned.');
   }
 
   protected async toggleRegression(tc: TestCase): Promise<void> {
-    await this.act(() => this.store.setRegression(tc, !tc.regression));
+    const on = !tc.regression;
+    if (await this.act(() => this.store.setRegression(tc, on))) {
+      this.toasts.show(on ? 'Added to the regression bank.' : 'Removed from the regression bank.');
+    }
   }
 
   protected async updateCopy(tc: TestCase, source: TestCase): Promise<void> {
-    await this.act(() => this.store.updateCopy(tc, source));
+    if (await this.act(() => this.store.updateCopy(tc, source))) this.toasts.show('Copy updated from the bank. It goes back to review.');
+  }
+
+  /** Menus close when you click anywhere else. */
+  @HostListener('document:click', ['$event'])
+  protected closeMenus(e: MouseEvent): void {
+    document.querySelectorAll<HTMLDetailsElement>('details.menu[open]').forEach((d) => {
+      if (!d.contains(e.target as Node)) d.open = false;
+    });
+  }
+
+  protected scrollToReview(): void {
+    document.getElementById('review-panel')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => document.querySelector<HTMLTextAreaElement>('#review-panel textarea')?.focus(), 300);
+  }
+
+  protected onReviewed(decision: 'approve' | 'request_changes'): void {
+    this.toasts.show(decision === 'approve' ? 'Approved. The runners have been assigned.' : 'Changes requested. Sent back to the author.');
+    this.reload();
   }
 
   protected reload(): void {
@@ -471,21 +566,23 @@ export class CaseDetailPage {
   }
 
   protected async submit(tc: TestCase): Promise<void> {
-    await this.act(async () => {
+    const ok = await this.act(async () => {
       await this.store.submit(tc, this.reviewers());
       this.submitDialog()?.nativeElement.close();
     });
+    if (ok) this.toasts.show(`Submitted for review to ${this.reviewers().join(', ')}.`);
   }
 
   protected async close(tc: TestCase, reason: string): Promise<void> {
-    await this.act(async () => {
+    const ok = await this.act(async () => {
       await this.store.close(tc, reason);
       this.closeDialogRef()?.nativeElement.close();
     });
+    if (ok) this.toasts.show("Closed as won't test.");
   }
 
   protected async reopen(tc: TestCase): Promise<void> {
-    await this.act(() => this.store.reopen(tc));
+    if (await this.act(() => this.store.reopen(tc))) this.toasts.show('Reopened as a draft.');
   }
 
   protected duplicate(tc: TestCase): void {
@@ -493,14 +590,18 @@ export class CaseDetailPage {
     void this.router.navigate(['../new'], { relativeTo: this.route, queryParamsHandling: 'preserve', state: { draft } });
   }
 
-  private async act(fn: () => Promise<unknown>): Promise<void> {
+  /** Runs an action, then reloads the case. Returns whether it worked. */
+  private async act(fn: () => Promise<unknown>): Promise<boolean> {
     this.busy.set(true);
     this.error.set(null);
     try {
       await fn();
       await this.loadDetail(this.number());
+      return true;
     } catch (e) {
       this.error.set(asGitHubError(e).message);
+      this.toasts.show(asGitHubError(e).message, 'bad');
+      return false;
     } finally {
       this.busy.set(false);
     }

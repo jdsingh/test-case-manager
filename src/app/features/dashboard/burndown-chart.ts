@@ -48,7 +48,7 @@ const fmt = (d: string) => new Date(t(d)).toLocaleDateString(undefined, { month:
         <path class="actual" [attr.d]="linePath()" />
         @if (last(); as p) {
           <circle class="dot" [attr.cx]="x(p.date)" [attr.cy]="y(p.remaining)" r="4.5" />
-          <text class="value" [attr.x]="x(p.date) + 8" [attr.y]="y(p.remaining) - 8">{{ p.remaining }} left</text>
+          <text class="value" [attr.x]="x(p.date) + 8" [attr.y]="y(p.remaining) + (behindPace() ? -10 : 18)">{{ p.remaining }} left</text>
         }
         @if (hover(); as hv) {
           <line class="cross" [attr.x1]="x(hv.date)" [attr.x2]="x(hv.date)" [attr.y1]="m.top" [attr.y2]="h - m.bottom" />
@@ -146,6 +146,15 @@ export class BurndownChart {
   protected readonly ariaLabel = computed(() => {
     const l = this.last();
     return `Burndown: ${l?.remaining ?? 0} of ${this.data().total} runs still to do on ${l ? fmt(l.date) : ''}; release ${fmt(this.data().end)}.`;
+  });
+
+  /**
+   * Behind pace, the pace line runs below the last point, so the label goes above it;
+   * ahead of pace, the pace line runs above, so the label goes below.
+   */
+  protected readonly behindPace = computed(() => {
+    const p = this.last();
+    return !!p && p.remaining > Number(this.idealAt(p.date));
   });
 
   protected label(d: string): string {

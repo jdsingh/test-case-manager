@@ -29,6 +29,10 @@ import {
 } from '../../core/testcase/model';
 import { buildStepLibrary, findSimilar } from '../../core/testcase/library';
 import { GherkinView } from './badges';
+import { Toasts } from '../../core/toast';
+import { CommentNode } from '../../core/github/api';
+import { LineNote, historyOf, isApplied, isOutdated } from '../../core/testcase/review';
+import { includesLogin } from '../../core/config/team-config';
 
 const KEYWORDS: Keyword[] = ['Given', 'When', 'Then', 'And'];
 
@@ -204,7 +208,16 @@ const KEYWORDS: Keyword[] = ['Given', 'When', 'Then', 'And'];
             }
 
             <div class="row footer">
-              @if (editing()) {
+              @if (editing()?.status === 'changes-requested') {
+                <button class="btn btn-primary" type="button" (click)="saveAndResubmit()" [disabled]="saving()">
+                  @if (saving()) { <span class="spinner" aria-hidden="true"></span> }
+                  Save and resubmit
+                </button>
+                <button class="btn" type="submit" [disabled]="saving() || !dirty()">Save only</button>
+                @if (resubmitTo().length) {
+                  <span class="muted small">to {{ resubmitTo().join(', ') }}</span>
+                }
+              } @else if (editing()) {
                 <button class="btn btn-primary" type="submit" [disabled]="saving() || !dirty()">
                   @if (saving()) { <span class="spinner" aria-hidden="true"></span> }
                   Save changes
@@ -225,6 +238,25 @@ const KEYWORDS: Keyword[] = ['Given', 'When', 'Then', 'And'];
           </form>
 
           <aside class="preview stack" aria-label="Preview">
+            @if (request(); as r) {
+              <section class="ask stack" aria-label="Requested changes">
+                <strong class="small">{{ r.author }} asked for changes</strong>
+                @if (r.note) {
+                  <p class="small">{{ r.note }}</p>
+                }
+                @for (n of openNotes(); track n.id) {
+                  <div class="small note">
+                    <span class="muted">Step {{ n.step + 1 }} · {{ n.author }}:</span> {{ n.note || 'Suggested new wording.' }}
+                    @if (n.suggestion !== null) {
+                      <div class="sugg">“{{ n.suggestion }}”</div>
+                      <button class="btn btn-link small" type="button" (click)="useSuggestion(n)" [disabled]="!canUse(n)">
+                        {{ canUse(n) ? 'Use suggestion' : 'Step changed' }}
+                      </button>
+                    }
+                  </div>
+                }
+              </section>
+            }
             <span class="muted small">Preview</span>
             <app-gherkin [name]="draft().title || 'Untitled scenario'" [steps]="draft().steps" />
             <p class="muted small">
@@ -253,6 +285,9 @@ const KEYWORDS: Keyword[] = ['Given', 'When', 'Then', 'And'];
     .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 28px; align-items: start; }
     @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
     .preview { position: sticky; top: 72px; }
+    .ask { padding: 12px; border-radius: var(--radius); background: var(--bad-soft); border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent); gap: 6px; }
+    .ask .note { padding-top: 6px; border-top: 1px solid color-mix(in srgb, var(--bad) 20%, transparent); }
+    .sugg { font-style: italic; margin: 2px 0; }
     .wrap { flex-wrap: wrap; }
     .gap16 { gap: 16px; align-items: flex-start; }
     .gap12 { gap: 12px; }
@@ -281,6 +316,7 @@ export class CaseEditorPage {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly injector = inject(Injector);
+  private readonly toasts = inject(Toasts);
   private readonly stepInputs = viewChildren<ElementRef<HTMLInputElement>>('stepInput');
 
   protected readonly priorities = PRIORITIES;
@@ -329,6 +365,56 @@ export class CaseEditorPage {
     const r = this.store.suggestReviewers({ platforms: this.draft().platforms, author: null });
     return r.length ? `and assigns it to ${r.join(', ')}` : '';
   });
+  /** Comments on the case being edited, for the change request panel. */
+  private readonly comments = signal<CommentNode[]>([]);
+  private readonly history = computed(() => historyOf(this.comments()));
+  protected readonly request = computed(() => {
+    if (this.editing()?.status !== 'changes-requested') return null;
+    const r = [...this.history().reviews].reverse().find((x) => x.decision === 'request_changes' && x.current);
+    return r ? { author: r.author, note: r.note } : null;
+  });
+  protected readonly openNotes = computed(() => {
+    const tc = this.editing();
+    return tc ? this.history().lineNotes.filter((n) => !isOutdated(n, tc) && !isApplied(n, tc)) : [];
+  });
+  /** Back to whoever asked for the changes, if they can still review it. */
+  protected readonly resubmitTo = computed(() => {
+    const asked = this.request()?.author;
+    const eligible = this.store.eligibleReviewers(this.draft().platforms);
+    if (asked && includesLogin(eligible, asked)) return [asked];
+    return this.store.suggestReviewers({ platforms: this.draft().platforms, author: null });
+  });
+
+  protected canUse(n: LineNote): boolean {
+    const step = this.draft().steps[n.step];
+    return !!step && step.text.trim() === n.original.trim() && n.suggestion !== null;
+  }
+
+  protected useSuggestion(n: LineNote): void {
+    if (!this.canUse(n)) return;
+    this.updateSteps((steps) => steps.map((s, i) => (i === n.step ? { ...s, text: n.suggestion! } : s)));
+  }
+
+  protected async saveAndResubmit(): Promise<void> {
+    this.attempted.set(true);
+    if (this.problems().length) return;
+    const tc = this.editing();
+    if (!tc) return;
+    this.saving.set(true);
+    this.error.set(null);
+    try {
+      const saved = await this.store.save(tc, this.cleaned());
+      await this.store.submit(saved, this.resubmitTo());
+      this.saved = true;
+      this.toasts.show(`Saved and resubmitted to ${this.resubmitTo().join(', ') || 'review'}.`);
+      await this.router.navigate(['..'], { relativeTo: this.route, queryParamsHandling: 'preserve' });
+    } catch (e) {
+      this.error.set(`Couldn't save: ${asGitHubError(e).message}`);
+    } finally {
+      this.saving.set(false);
+    }
+  }
+
   protected readonly repoOwner = computed(() => this.ws.repo()?.owner ?? '');
   protected readonly repoName = computed(() => this.ws.repo()?.name ?? '');
 
@@ -422,6 +508,7 @@ export class CaseEditorPage {
         ? await this.store.save(tc, draft)
         : await this.store.create(draft, submit ? { submitTo: this.submitTo() } : {});
       this.saved = true;
+      this.toasts.show(tc ? 'Saved.' : submit ? `Created #${result.number} and sent it for review.` : `Created #${result.number} as a draft.`);
       const path = tc ? ['..'] : ['..', result.number];
       await this.router.navigate(path, { relativeTo: this.route, queryParamsHandling: 'preserve' });
     } catch (e) {
@@ -464,7 +551,8 @@ export class CaseEditorPage {
         this.original.set(emptyDraft());
         this.draft.set(fromState ? structuredClone(fromState) : emptyDraft());
       } else {
-        const { testCase } = await this.store.detail(n);
+        const { testCase, comments } = await this.store.detail(n);
+        this.comments.set(comments);
         const d = draftOf(testCase);
         if (!d.steps.length) d.steps = emptyDraft().steps;
         this.editing.set(testCase);

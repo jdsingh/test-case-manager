@@ -9,6 +9,7 @@ import { CasesStore } from '../../core/testcase/cases-store';
 import { CommentNode } from '../../core/github/api';
 import { TestCase } from '../../core/testcase/model';
 import { historyOf } from '../../core/testcase/review';
+import { timeAgo } from '../../core/time';
 import { includesLogin, sameLogin } from '../../core/config/team-config';
 import { PlatformBadges, PriorityBadge } from '../cases/badges';
 import { StepNotes } from './step-notes';
@@ -19,7 +20,7 @@ import { ReviewPanel } from './review-panel';
   selector: 'app-review-page',
   imports: [RouterLink, PriorityBadge, PlatformBadges, StepNotes, ReviewPanel],
   template: `
-    <main class="page stack wide">
+    <main class="page stack">
       <div class="row">
         <div class="stack" style="gap: 2px">
           <h1>Review</h1>
@@ -86,6 +87,29 @@ import { ReviewPanel } from './review-panel';
               @if (tc.preconditions) {
                 <p><span class="muted small">Preconditions:</span> {{ tc.preconditions }}</p>
               }
+              @if (lastAsk(); as ask) {
+                <div class="banner small" role="note">
+                  <div>
+                    <strong>Last round, {{ ask.author }} asked for changes:</strong> {{ ask.note || '(no comment)' }}
+                    <div class="muted">Check that this version addresses it.</div>
+                  </div>
+                </div>
+              }
+              @if (earlier().length) {
+                <details class="small">
+                  <summary>Earlier reviews ({{ earlier().length }})</summary>
+                  <ul class="earlier">
+                    @for (r of earlier(); track r.id) {
+                      <li>
+                        <strong>{{ r.author }}</strong>
+                        {{ r.decision === 'approve' ? 'approved' : 'requested changes' }}
+                        <span class="muted">· {{ ago(r.createdAt) }}</span>
+                        @if (r.note) { <div class="muted">{{ r.note }}</div> }
+                      </li>
+                    }
+                  </ul>
+                </details>
+              }
               @if (loadingDetail()) {
                 <div class="row muted small"><span class="spinner" aria-hidden="true"></span> Loading comments…</div>
               }
@@ -109,7 +133,6 @@ import { ReviewPanel } from './review-panel';
     </main>
   `,
   styles: `
-    .wide { max-width: 1120px; }
     .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; align-items: start; }
     @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
     .queue { padding: 6px; position: sticky; top: 72px; max-height: calc(100vh - 100px); overflow: auto; }
@@ -120,6 +143,7 @@ import { ReviewPanel } from './review-panel';
     .t { font-weight: 500; }
     .mine { color: var(--accent); font-size: 11.5px; }
     .title a { color: var(--text-2); text-decoration: none; }
+    .earlier { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
   `,
 })
 export class ReviewPage {
@@ -169,6 +193,11 @@ export class ReviewPage {
   protected readonly history = computed(() =>
     historyOf(this.commentsFor() === this.current()?.number ? this.comments() : []),
   );
+
+  /** Reviews of earlier versions of this case (RV-4), newest first (UX 11). */
+  protected readonly earlier = computed(() => [...this.history().reviews].filter((r) => !r.current).reverse());
+  protected readonly lastAsk = computed(() => this.earlier().find((r) => r.decision === 'request_changes') ?? null);
+  protected readonly ago = (iso: string) => timeAgo(iso);
 
   constructor() {
     effect(() => {

@@ -18,23 +18,7 @@ import { RunForm } from './run-form';
   imports: [EvidenceThumb, RunForm],
   template: `
     <section class="stack" aria-labelledby="runs-h">
-      <div class="row">
-        <h2 class="h-small" id="runs-h">Runs{{ target() ? ' on v' + target() : '' }}</h2>
-        <span class="spacer"></span>
-        @if (runnable() && !formOpen()) {
-          <button class="btn btn-primary" type="button" (click)="formOpen.set(true)">Record a run</button>
-        }
-      </div>
-
-      @if (!runnable() && !tc().closed) {
-        <p class="muted small">Runs can be recorded once the case is approved.</p>
-      }
-
-      @if (formOpen()) {
-        <div class="card">
-          <app-run-form [tc]="tc()" (recorded)="changed.emit()" (done)="formOpen.set(false); changed.emit()" (cancelled)="formOpen.set(false)" />
-        </div>
-      }
+      <h2 class="h-small" id="runs-h">Runs @if (target(); as t) { <span class="ver">on v{{ t }}</span> }</h2>
 
       <div class="results">
         @for (p of tc().platforms; track p) {
@@ -48,9 +32,34 @@ import { RunForm } from './run-form';
               <div class="big muted">Not run</div>
               <div class="small muted">{{ target() ? 'No run on v' + target() + ' yet' : 'No run yet' }}</div>
             }
+            @if (runnable() && formPlatform() !== p) {
+              @switch (latest()[p]?.result) {
+                @case ('pass') {
+                  <button class="btn btn-link small card-action" type="button" (click)="openFor(p)">Run again</button>
+                }
+                @case (undefined) {
+                  <button class="btn btn-primary small card-action" type="button" (click)="openFor(p)">Record {{ names[p] }} run</button>
+                }
+                @default {
+                  <button class="btn btn-primary small card-action" type="button" (click)="openFor(p)">Re-run on {{ names[p] }}</button>
+                }
+              }
+            }
           </div>
         }
       </div>
+
+      @if (formPlatform(); as fp) {
+        <div class="card" id="run-form">
+          <app-run-form
+            [tc]="tc()"
+            [platform]="fp"
+            (recorded)="changed.emit()"
+            (done)="formPlatform.set(null); changed.emit()"
+            (cancelled)="formPlatform.set(null)"
+          />
+        </div>
+      }
 
       @if (runs().length) {
         <ol class="history">
@@ -84,7 +93,7 @@ import { RunForm } from './run-form';
 
       @if (bugs().length) {
         <div class="small">
-          <strong>Bugs filed:</strong>
+          <strong>Bugs filed:</strong>&nbsp;
           @for (b of bugs(); track b.url) {
             <a [href]="b.url" target="_blank" rel="noopener">{{ b.issue }}</a>{{ b.platform ? ' (' + names[b.platform] + ')' : '' }}&nbsp;
           }
@@ -106,8 +115,10 @@ import { RunForm } from './run-form';
   `,
   styles: `
     .h-small { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); }
+    .ver { text-transform: none; letter-spacing: 0; font-weight: 500; }
     .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
-    .result { padding: 12px 14px; border-left-width: 4px; }
+    .result { padding: 12px 14px; border-left-width: 4px; display: flex; flex-direction: column; gap: 2px; }
+    .card-action { align-self: flex-start; margin-top: 8px; }
     .res-pass { border-left-color: var(--good); }
     .res-fail { border-left-color: var(--bad); }
     .res-blocked { border-left-color: var(--warn); }
@@ -134,7 +145,14 @@ export class RunsSection {
 
   protected readonly names = PLATFORM_NAMES;
   protected readonly resultLabels = RESULT_LABELS;
-  protected readonly formOpen = signal(false);
+  /** The platform whose run form is open, if any. */
+  protected readonly formPlatform = signal<Platform | null>(null);
+
+  /** Opens the run form for a platform and brings it into view. */
+  openFor(p: Platform): void {
+    this.formPlatform.set(p);
+    setTimeout(() => document.getElementById('run-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }
   protected readonly ago = (iso: string) => timeAgo(iso);
   protected readonly nonEmpty = (s: string) => !!s;
 
